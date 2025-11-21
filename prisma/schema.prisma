@@ -1,0 +1,119 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Map {
+  id             String         @id @default(cuid())
+  slug           String         @unique
+  name           String
+  description    String?
+  baseMapType    MapType        @default(TILE)
+  tileUrl        String?
+  tileAttribution String?
+  imageOverlayUrl String?
+  imageBounds    Json?
+  metadata       Json?
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  locationPins   LocationPin[]
+  routes         Route[]
+}
+
+model LocationPin {
+  id          String    @id @default(cuid())
+  mapId       String
+  map         Map       @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String
+  description String?
+  lat         Float
+  lng         Float
+  floor       String?
+  category    String?
+  audioText   String?
+  imageUrl    String?
+  videoUrl    String?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  routeStart  Route[]   @relation("RouteStart")
+  routeEnd    Route[]   @relation("RouteEnd")
+  waypoints   RouteWaypoint[]
+
+  @@unique([slug, mapId], name: "slug_mapId")
+}
+
+model Route {
+  id               String          @id @default(cuid())
+  mapId            String
+  map              Map             @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  name             String
+  slug             String
+  description      String?
+  isDefault        Boolean         @default(false)
+  estimatedMinutes Int?            @default(5)
+  startLocationId  String
+  startLocation    LocationPin     @relation("RouteStart", fields: [startLocationId], references: [id])
+  endLocationId    String
+  endLocation      LocationPin     @relation("RouteEnd", fields: [endLocationId], references: [id])
+  instructions     String?
+  metadata         Json?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  waypoints        RouteWaypoint[]
+
+  @@unique([slug, mapId], name: "slug_mapId")
+}
+
+model RouteWaypoint {
+  id          String       @id @default(cuid())
+  routeId     String
+  route       Route        @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  order       Int
+  lat         Float
+  lng         Float
+  locationId  String?
+  location    LocationPin? @relation(fields: [locationId], references: [id])
+  instruction String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([routeId, order])
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  email        String   @unique
+  passwordHash String
+  name         String?
+  role         AdminRole @default(SUPERADMIN)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+enum MapType {
+  TILE
+  IMAGE_OVERLAY
+}
+
+enum AdminRole {
+  SUPERADMIN
+  EDITOR
+}
