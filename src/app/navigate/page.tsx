@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Compass, Loader2, Map, Mic, Navigation, PinIcon } from "lucide-react";
 import type { LatLngExpression } from "leaflet";
-import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
 import { formatMeters } from "@/lib/utils";
@@ -26,24 +25,38 @@ const Popup = dynamic(() => import("react-leaflet").then((mod) => mod.Popup), {
 const Polyline = dynamic(() => import("react-leaflet").then((mod) => mod.Polyline), {
   ssr: false,
 }) as typeof import("react-leaflet").Polyline;
+const Circle = dynamic(() => import("react-leaflet").then((mod) => mod.Circle), {
+  ssr: false,
+}) as typeof import("react-leaflet").Circle;
 
 const defaultCenter: [number, number] = [37.4221, -122.0841];
 
-const userIcon = L.icon({
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-});
-
 export default function NavigatePage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const destinationParam = searchParams.get("destination");
   const [maps, setMaps] = useState<MapDTO[]>([]);
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
   const [userPosition, setUserPosition] = useState<[number, number] | null>(null);
+  const [accuracy, setAccuracy] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [userIcon, setUserIcon] = useState<L.Icon | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const L = (await import("leaflet")).default;
+      setUserIcon(
+        L.icon({
+          iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+          iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+          iconSize: [25, 41],
+          iconAnchor: [12, 41],
+        })
+      );
+    })();
+  }, []);
 
   useEffect(() => {
     async function fetchMaps() {
@@ -71,11 +84,12 @@ export default function NavigatePage() {
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         setUserPosition([pos.coords.latitude, pos.coords.longitude]);
+        setAccuracy(pos.coords.accuracy);
       },
       () => {
         setError((prev) => prev ?? "Geolocation unavailable. Some guidance features may be limited.");
       },
-      { enableHighAccuracy: true },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 },
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
@@ -163,6 +177,7 @@ export default function NavigatePage() {
                   <TileLayer
                     url={selectedMap.tileUrl ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"}
                     attribution={selectedMap.tileAttribution ?? "© OpenStreetMap"}
+                    noWrap={true}
                   />
                   {routePolyline && (
                     <Polyline
@@ -183,19 +198,30 @@ export default function NavigatePage() {
                     />
                   )}
                   {selectedMap.locationPins.map((pin) => (
-                    <Marker key={pin.id} position={[pin.lat, pin.lng]} icon={userIcon}>
-                      <Popup>
-                        <div className="space-y-1 text-slate-800">
-                          <p className="font-semibold">{pin.name}</p>
-                          {pin.description && <p className="text-sm">{pin.description}</p>}
-                        </div>
-                      </Popup>
-                    </Marker>
+                    userIcon && (
+                      <Marker key={pin.id} position={[pin.lat, pin.lng]} icon={userIcon}>
+                        <Popup>
+                          <div className="space-y-1 text-slate-800">
+                            <p className="font-semibold">{pin.name}</p>
+                            {pin.description && <p className="text-sm">{pin.description}</p>}
+                            <button
+                              onClick={() => router.push(`/navigate?destination=${encodeURIComponent(pin.name)}`)}
+                              className="mt-2 w-full rounded-md bg-brand-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-400"
+                            >
+                              Navigate Here
+                            </button>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    )
                   ))}
-                  {userPosition && (
-                    <Marker position={userPosition} icon={userIcon}>
-                      <Popup>You are here</Popup>
-                    </Marker>
+                  {userPosition && userIcon && (
+                    <>
+                      <Marker position={userPosition} icon={userIcon}>
+                        <Popup>You are here (±{Math.round(accuracy)}m)</Popup>
+                      </Marker>
+                      <Circle center={userPosition} radius={accuracy} pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.1 }} />
+                    </>
                   )}
                 </MapContainer>
               </div>

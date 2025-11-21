@@ -9,167 +9,107 @@ async function main() {
   const campusMap = await prisma.map.upsert({
     where: { slug: "central-campus" },
     update: {
-      name: "Central Innovation Campus",
+      name: "MVJ College of Engineering",
       description:
-        "A demo campus showcasing how the navigation assistant guides visitors across buildings and labs.",
+        "Navigate the MVJCE campus with ease. Find labs, libraries, and departments.",
       tileUrl: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       tileAttribution: "&copy; OpenStreetMap contributors",
       metadata: {
-        welcomeMessage: "Welcome to the Central Innovation Campus!",
+        welcomeMessage: "Welcome to MVJ College of Engineering!",
       },
     },
     create: {
       slug: "central-campus",
-      name: "Central Innovation Campus",
+      name: "MVJ College of Engineering",
       description:
-        "A demo campus showcasing how the navigation assistant guides visitors across buildings and labs.",
+        "Navigate the MVJCE campus with ease. Find labs, libraries, and departments.",
       baseMapType: MapType.TILE,
       tileUrl: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       tileAttribution: "&copy; OpenStreetMap contributors",
       metadata: {
-        welcomeMessage: "Welcome to the Central Innovation Campus!",
+        welcomeMessage: "Welcome to MVJ College of Engineering!",
       },
     },
   });
 
-  const welcomeCenter = await prisma.locationPin.upsert({
-    where: { slug_mapId: { slug: "welcome-center", mapId: campusMap.id } },
-    update: {
-      name: "Welcome Center",
-      description:
-        "Pick up visitor passes, ask questions, and meet the concierge team.",
-      lat: 37.4221,
-      lng: -122.0841,
-      audioText:
-        "You are at the Welcome Center. This is the perfect spot to begin your tour of the campus.",
-      imageUrl: "https://images.unsplash.com/photo-1485217988980-11786ced9454",
-    },
-    create: {
+  // Clear existing data for this map to prevent jumbled pins
+  await prisma.route.deleteMany({ where: { mapId: campusMap.id } });
+  await prisma.locationPin.deleteMany({ where: { mapId: campusMap.id } });
+
+  const welcomeCenter = await prisma.locationPin.create({
+    data: {
       slug: "welcome-center",
       mapId: campusMap.id,
-      name: "Welcome Center",
+      name: "Main Gate (Welcome Center)",
       description:
-        "Pick up visitor passes, ask questions, and meet the concierge team.",
-      lat: 37.4221,
-      lng: -122.0841,
+        "Main entrance to the college. Security and information desk available here.",
+      lat: 12.9837,
+      lng: 77.7572,
       audioText:
-        "You are at the Welcome Center. This is the perfect spot to begin your tour of the campus.",
-      imageUrl: "https://images.unsplash.com/photo-1485217988980-11786ced9454",
+        "You are at the Main Gate of MVJ College of Engineering.",
+      imageUrl: "https://images.unsplash.com/photo-1562774053-701939374585",
     },
   });
 
-  const innovationHub = await prisma.locationPin.upsert({
-    where: { slug_mapId: { slug: "innovation-hub", mapId: campusMap.id } },
-    update: {
-      name: "Innovation Hub",
-      description: "A collaborative workspace for research teams and founders.",
-      lat: 37.4212,
-      lng: -122.085,
-      audioText:
-        "The Innovation Hub is where students build prototypes, test ideas, and showcase demos.",
-      imageUrl: "https://images.unsplash.com/photo-1461749280684-dccba630e2f6",
-    },
-    create: {
+  const innovationHub = await prisma.locationPin.create({
+    data: {
       slug: "innovation-hub",
       mapId: campusMap.id,
-      name: "Innovation Hub",
-      description: "A collaborative workspace for research teams and founders.",
-      lat: 37.4212,
-      lng: -122.085,
+      name: "Admin Block",
+      description: "Administrative offices, Principal's office, and Admissions.",
+      lat: 12.9840,
+      lng: 77.7575,
       audioText:
-        "The Innovation Hub is where students build prototypes, test ideas, and showcase demos.",
-      imageUrl: "https://images.unsplash.com/photo-1461749280684-dccba630e2f6",
+        "This is the Admin Block, housing the administrative offices.",
+      imageUrl: "https://images.unsplash.com/photo-1497366216548-37526070297c",
     },
   });
 
-  const library = await prisma.locationPin.upsert({
-    where: { slug_mapId: { slug: "knowledge-library", mapId: campusMap.id } },
-    update: {
-      name: "Knowledge Library",
-      description: "Silent study spaces, archives, and digital resource labs.",
-      lat: 37.4204,
-      lng: -122.0838,
-      audioText: "The Knowledge Library offers collaborative zones and quiet pods.",
-      imageUrl: "https://images.unsplash.com/photo-1469474968028-56623f02e42e",
-    },
-    create: {
+  const library = await prisma.locationPin.create({
+    data: {
       slug: "knowledge-library",
       mapId: campusMap.id,
-      name: "Knowledge Library",
-      description: "Silent study spaces, archives, and digital resource labs.",
-      lat: 37.4204,
-      lng: -122.0838,
-      audioText: "The Knowledge Library offers collaborative zones and quiet pods.",
-      imageUrl: "https://images.unsplash.com/photo-1469474968028-56623f02e42e",
+      name: "Central Library",
+      description: "Main library building with reading rooms and digital access.",
+      lat: 12.9835,
+      lng: 77.7580,
+      audioText: "The Central Library is a quiet zone for study and research.",
+      imageUrl: "https://images.unsplash.com/photo-1521587760476-6c12a4b040da",
     },
   });
 
-  await prisma.route.upsert({
-    where: { slug_mapId: { slug: "welcome-to-library", mapId: campusMap.id } },
-    update: {
-      name: "Welcome Center to Library",
-      description: "A shaded path that guides visitors through the quad.",
-      startLocationId: welcomeCenter.id,
-      endLocationId: library.id,
-      instructions:
-        "Exit the Welcome Center, keep Innovation Hub on your left, and continue straight until you reach the Library entrance.",
-      waypoints: {
-        deleteMany: {},
-        create: [
-          {
-            order: 1,
-            lat: welcomeCenter.lat,
-            lng: welcomeCenter.lng,
-            instruction: "Head south toward the main quad.",
-          },
-          {
-            order: 2,
-            lat: innovationHub.lat,
-            lng: innovationHub.lng,
-            locationId: innovationHub.id,
-            instruction: "Pass by the Innovation Hub on your left and stay on the paved pathway.",
-          },
-          {
-            order: 3,
-            lat: library.lat,
-            lng: library.lng,
-            locationId: library.id,
-            instruction: "Arrive at the Library entrance.",
-          },
-        ],
-      },
-    },
-    create: {
-      slug: "welcome-to-library",
+  await prisma.route.create({
+    data: {
+      slug: "mvj-campus-tour",
       mapId: campusMap.id,
-      name: "Welcome Center to Library",
-      description: "A shaded path that guides visitors through the quad.",
+      name: "MVJ Campus Tour",
+      description: "A guided tour from the Main Gate to the Library.",
       isDefault: true,
       startLocationId: welcomeCenter.id,
       endLocationId: library.id,
       instructions:
-        "Exit the Welcome Center, keep Innovation Hub on your left, and continue straight until you reach the Library entrance.",
+        "Start at the Main Gate, walk past the Admin Block on your left, and proceed to the Central Library.",
       waypoints: {
         create: [
           {
             order: 1,
             lat: welcomeCenter.lat,
             lng: welcomeCenter.lng,
-            instruction: "Head south toward the main quad.",
+            instruction: "Start at the Main Gate.",
           },
           {
             order: 2,
             lat: innovationHub.lat,
             lng: innovationHub.lng,
             locationId: innovationHub.id,
-            instruction: "Pass by the Innovation Hub on your left and stay on the paved pathway.",
+            instruction: "Pass the Admin Block on your left.",
           },
           {
             order: 3,
             lat: library.lat,
             lng: library.lng,
             locationId: library.id,
-            instruction: "Arrive at the Library entrance.",
+            instruction: "Arrive at the Central Library.",
           },
         ],
       },

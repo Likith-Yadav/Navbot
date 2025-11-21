@@ -60,7 +60,22 @@ export function startListening(
 
     recognition.onerror = (event: any) => {
         console.error("Speech recognition error:", event.error);
-        onError?.(event.error);
+        let errorMessage = "Unknown error";
+        switch (event.error) {
+            case "network":
+                errorMessage = "Network error. Please check your connection.";
+                break;
+            case "not-allowed":
+            case "service-not-allowed":
+                errorMessage = "Microphone access denied.";
+                break;
+            case "no-speech":
+                errorMessage = "No speech detected.";
+                break;
+            default:
+                errorMessage = event.error;
+        }
+        onError?.(errorMessage);
     };
 
     recognition.start();
