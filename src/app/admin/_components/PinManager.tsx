@@ -237,6 +237,7 @@ export function PinManager({ maps }: PinManagerProps) {
                                         setDescription("");
                                         setImageUrl("");
                                         setAudioText("");
+                                        setVideoUrl("");
                                     }}
                                     className="mt-2 w-full text-sm text-slate-400 hover:text-white"
                                 >
@@ -272,6 +273,7 @@ export function PinManager({ maps }: PinManagerProps) {
                                             setDescription(pin.description ?? "");
                                             setImageUrl(pin.imageUrl ?? "");
                                             setAudioText(pin.audioText ?? "");
+                                            setVideoUrl(pin.videoUrl ?? "");
                                         }}
                                         className="text-slate-400 hover:text-brand-300"
                                     >

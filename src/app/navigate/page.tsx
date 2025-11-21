@@ -161,6 +161,9 @@ export default function NavigatePage() {
   const [userIcon, setUserIcon] = useState<Icon | null>(null);
   const spokenWaypointsRef = useRef<Set<string>>(new Set());
   const leafletRef = useRef<typeof import("leaflet")>();
+  const hasSpokenRouteRef = useRef<string | null>(null);
+  const [arrivalPin, setArrivalPin] = useState<LocationPinDTO | null>(null);
+  const [activePinCard, setActivePinCard] = useState<LocationPinDTO | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -418,7 +421,10 @@ export default function NavigatePage() {
     spokenWaypointsRef.current.add(key);
 
     const isFinal = closestIdx === sortedWaypoints.length - 1;
-    if (wp.location) setArrivalPin(wp.location);
+    if (wp.location) {
+      setArrivalPin(wp.location);
+      setActivePinCard(wp.location);
+    }
     const line = isFinal
       ? `You have arrived at ${activeRoute.endLocation?.name ?? "your destination"}.`
       : wp.location?.audioText ??
@@ -431,9 +437,6 @@ export default function NavigatePage() {
     ? [selectedMap.locationPins[0].lat, selectedMap.locationPins[0].lng]
     : defaultCenter;
 
-  // Speak route summary once per route selection, even if user is off campus
-  const hasSpokenRouteRef = useRef<string | null>(null);
-  const [arrivalPin, setArrivalPin] = useState<LocationPinDTO | null>(null);
   useEffect(() => {
     if (!activeRoute) return;
     const key = `${activeRoute.id}-${destinationParam ?? ""}`;
@@ -662,7 +665,10 @@ export default function NavigatePage() {
                       key={pin.id}
                       position={[pin.lat, pin.lng]}
                       eventHandlers={{
-                        click: () => speak(pin.audioText ?? pin.description ?? `You selected ${pin.name}.`),
+                        click: () => {
+                          setActivePinCard(pin);
+                          speak(pin.audioText ?? pin.description ?? `You selected ${pin.name}.`);
+                        },
                       }}
                     >
                       <Popup>
@@ -709,9 +715,55 @@ export default function NavigatePage() {
                 </MapContainer>
               </div>
             </div >
-          )
-          }
-        </div >
+          )}
+
+          {activePinCard && (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/70 p-4 text-sm text-slate-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-brand-200">Current location</p>
+                  <p className="text-lg font-semibold text-white">{activePinCard.name}</p>
+                </div>
+                <button
+                  onClick={() => setActivePinCard(null)}
+                  className="text-xs text-slate-400 hover:text-white"
+                >
+                  Close
+                </button>
+              </div>
+              {activePinCard.imageUrl && (
+                <img
+                  src={activePinCard.imageUrl}
+                  alt={activePinCard.name}
+                  className="mt-3 h-40 w-full rounded-xl object-cover"
+                />
+              )}
+              {activePinCard.videoUrl && (
+                <video
+                  className="mt-3 h-48 w-full rounded-xl bg-black"
+                  src={activePinCard.videoUrl}
+                  controls
+                  playsInline
+                />
+              )}
+              {activePinCard.description && <p className="mt-2 text-slate-200">{activePinCard.description}</p>}
+              <div className="mt-3 flex gap-3">
+                <button
+                  className="text-xs text-brand-300 underline"
+                  onClick={() => speak(activePinCard.audioText ?? activePinCard.description ?? activePinCard.name)}
+                >
+                  Play audio
+                </button>
+                <button
+                  className="text-xs text-brand-300 underline"
+                  onClick={() => router.push(`/navigate?destination=${encodeURIComponent(activePinCard.name)}`)}
+                >
+                  Navigate here
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         <aside className="w-full space-y-6 lg:w-1/3">
           {arrivalPin && (
