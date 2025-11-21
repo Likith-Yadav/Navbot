@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Mic, Send, Loader2 } from "lucide-react";
 import { speak, startListening } from "@/lib/voice-utils";
@@ -23,6 +23,18 @@ export function VoiceAssistant() {
     const [inputText, setInputText] = useState("");
     const [isListening, setIsListening] = useState(false);
     const hasStarted = useRef(false);
+    const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+    const stopListening = useCallback(() => {
+        recognitionRef.current?.abort();
+        recognitionRef.current = null;
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            stopListening();
+        };
+    }, [stopListening]);
 
     const startFlow = () => {
         if (hasStarted.current) return;
@@ -32,6 +44,8 @@ export function VoiceAssistant() {
 
     const handleManualSubmit = async () => {
         if (!inputText.trim()) return;
+        stopListening();
+        setIsListening(false);
 
         if (state === "LISTENING_NAME" || state === "GREETING") {
             setTranscript(`You: ${inputText}`);
@@ -51,6 +65,10 @@ export function VoiceAssistant() {
     };
 
     useEffect(() => {
+        if (state !== "LISTENING_NAME" && state !== "LISTENING_DESTINATION") {
+            stopListening();
+        }
+
         if (state === "GREETING") {
             const greeting = "Hi there! Welcome to MVJ College of Engineering. I am your automated navigation assistant of MVJ. What's your name?";
             setTranscript(`Assistant: ${greeting}`);
@@ -59,9 +77,10 @@ export function VoiceAssistant() {
             });
         } else if (state === "LISTENING_NAME") {
             setIsListening(true);
-            startListening(
+            recognitionRef.current = startListening(
                 async (text) => {
                     setIsListening(false);
+                    stopListening();
                     setTranscript(`You: ${text}`);
                     const name = await processVoiceCommand(text, "NAME");
                     setUserName(name);
@@ -70,6 +89,7 @@ export function VoiceAssistant() {
                 (err) => {
                     console.error("Voice error:", err);
                     setIsListening(false);
+                    stopListening();
                     setTranscript(`Error: ${err}. Please type your response.`);
                 }
             );
@@ -82,9 +102,10 @@ export function VoiceAssistant() {
             });
         } else if (state === "LISTENING_DESTINATION") {
             setIsListening(true);
-            startListening(
+            recognitionRef.current = startListening(
                 async (text) => {
                     setIsListening(false);
+                    stopListening();
                     setTranscript(`You: ${text}`);
                     const destination = await processVoiceCommand(text, "DESTINATION");
                     setState("REDIRECTING");
@@ -97,11 +118,12 @@ export function VoiceAssistant() {
                 (err) => {
                     console.error("Voice error:", err);
                     setIsListening(false);
+                    stopListening();
                     setTranscript(`Error: ${err}. Please type your destination.`);
                 }
             );
         }
-    }, [state, userName, router]);
+    }, [state, userName, router, stopListening]);
 
     if (state === "IDLE") {
         return (

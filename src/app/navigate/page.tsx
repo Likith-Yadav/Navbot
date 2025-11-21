@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Compass, Loader2, Map, Mic, Navigation, PinIcon } from "lucide-react";
-import type { LatLngExpression } from "leaflet";
+import L, { LatLngBoundsExpression, LatLngExpression } from "leaflet";
+import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 import { formatMeters } from "@/lib/utils";
@@ -28,8 +29,94 @@ const Polyline = dynamic(() => import("react-leaflet").then((mod) => mod.Polylin
 const Circle = dynamic(() => import("react-leaflet").then((mod) => mod.Circle), {
   ssr: false,
 }) as typeof import("react-leaflet").Circle;
+const ImageOverlay = dynamic(() => import("react-leaflet").then((mod) => mod.ImageOverlay), {
+  ssr: false,
+}) as typeof import("react-leaflet").ImageOverlay;
 
 const defaultCenter: [number, number] = [37.4221, -122.0841];
+
+const normalizeLng = (lng: number) => {
+  const normalized = ((lng + 180) % 360 + 360) % 360 - 180;
+  return Number.isFinite(normalized) ? normalized : lng;
+};
+
+type BoundsInfo = {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+  center: [number, number];
+};
+
+function parseImageBounds(bounds: MapDTO["imageBounds"]): LatLngBoundsExpression | null {
+  if (!bounds) return null;
+
+  if (
+    Array.isArray(bounds) &&
+    bounds.length === 2 &&
+    Array.isArray(bounds[0]) &&
+    Array.isArray(bounds[1]) &&
+    bounds[0].length >= 2 &&
+    bounds[1].length >= 2
+  ) {
+    return [
+      [Number(bounds[0][0]), Number(bounds[0][1])],
+      [Number(bounds[1][0]), Number(bounds[1][1])],
+    ];
+  }
+
+  const maybeObj = bounds as Record<string, any>;
+  if (
+    maybeObj?.southWest &&
+    maybeObj?.northEast &&
+    typeof maybeObj.southWest.lat === "number" &&
+    typeof maybeObj.southWest.lng === "number" &&
+    typeof maybeObj.northEast.lat === "number" &&
+    typeof maybeObj.northEast.lng === "number"
+  ) {
+    return [
+      [maybeObj.southWest.lat, maybeObj.southWest.lng],
+      [maybeObj.northEast.lat, maybeObj.northEast.lng],
+    ];
+  }
+
+  return null;
+}
+
+function buildBoundsExpression(bounds: BoundsInfo): LatLngBoundsExpression {
+  return [
+    [bounds.minLat, bounds.minLng],
+    [bounds.maxLat, bounds.maxLng],
+  ];
+}
+
+function distanceInKm(a: [number, number], b: [number, number]) {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(b[0] - a[0]);
+  const dLng = toRad(b[1] - a[1]);
+  const lat1 = toRad(a[0]);
+  const lat2 = toRad(b[0]);
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng),
+      Math.sqrt(1 - sinDLat * sinDLat - Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng),
+    );
+  return R * c;
+}
+
+function FitMapBounds({ bounds }: { bounds: LatLngBoundsExpression }) {
+  const map = useMap();
+
+  useEffect(() => {
+    map.fitBounds(bounds, { padding: [48, 48], maxZoom: 20 });
+  }, [map, bounds]);
+
+  return null;
+}
 
 export default function NavigatePage() {
   const router = useRouter();
@@ -41,21 +128,29 @@ export default function NavigatePage() {
   const [accuracy, setAccuracy] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [viewportMode, setViewportMode] = useState<"combined" | "campus" | "user">("combined");
 
   const [userIcon, setUserIcon] = useState<L.Icon | null>(null);
 
   useEffect(() => {
-    (async () => {
-      const L = (await import("leaflet")).default;
-      setUserIcon(
-        L.icon({
-          iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-          iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-          iconSize: [25, 41],
-          iconAnchor: [12, 41],
-        })
-      );
-    })();
+    // Ensure default Leaflet icon assets are set so pins always render
+    L.Icon.Default.mergeOptions({
+      iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+      iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+      shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+      iconSize: [25, 41],
+      iconAnchor: [12, 41],
+    });
+
+    setUserIcon(
+      L.icon({
+        iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+        iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+        iconSize: [30, 48],
+        iconAnchor: [15, 48],
+        className: "user-location-marker",
+      })
+    );
   }, []);
 
   useEffect(() => {
@@ -117,12 +212,85 @@ export default function NavigatePage() {
     ? activeRoute.waypoints
       .slice()
       .sort((a, b) => a.order - b.order)
-      .map((waypoint) => [waypoint.lat, waypoint.lng])
+        .map((waypoint) => [waypoint.lat, normalizeLng(waypoint.lng)])
     : undefined;
 
   const center: [number, number] = selectedMap?.locationPins?.[0]
     ? [selectedMap.locationPins[0].lat, selectedMap.locationPins[0].lng]
     : defaultCenter;
+
+  const campusBounds = useMemo<BoundsInfo | null>(() => {
+    if (!selectedMap?.locationPins.length) return null;
+    const lats = selectedMap.locationPins.map((pin) => pin.lat);
+    const lngs = selectedMap.locationPins.map((pin) => normalizeLng(pin.lng));
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+    return {
+      minLat,
+      maxLat,
+      minLng,
+      maxLng,
+      center: [(minLat + maxLat) / 2, (minLng + maxLng) / 2] as [number, number],
+    };
+  }, [selectedMap]);
+
+  const userWithinCampus = useMemo(() => {
+    if (!userPosition || !campusBounds) return false;
+    const [lat, lngRaw] = userPosition;
+    const lng = normalizeLng(lngRaw);
+    const padding = 0.01;
+    return (
+      lat >= campusBounds.minLat - padding &&
+      lat <= campusBounds.maxLat + padding &&
+      lng >= campusBounds.minLng - padding &&
+      lng <= campusBounds.maxLng + padding
+    );
+  }, [userPosition, campusBounds]);
+
+  const distanceFromCampus = useMemo(() => {
+    if (!userPosition || !campusBounds) return null;
+    const normalizedUser: [number, number] = [userPosition[0], normalizeLng(userPosition[1])];
+    return distanceInKm(normalizedUser, campusBounds.center);
+  }, [userPosition, campusBounds]);
+
+  const campusBoundsExpression = useMemo<LatLngBoundsExpression | null>(() => {
+    if (!campusBounds) return null;
+    return buildBoundsExpression(campusBounds);
+  }, [campusBounds]);
+
+  const fitBounds = useMemo<LatLngBoundsExpression | null>(() => {
+    const userBounds: LatLngBoundsExpression | null = userPosition
+      ? ([
+          [userPosition[0], normalizeLng(userPosition[1])],
+          [userPosition[0], normalizeLng(userPosition[1])],
+        ] as LatLngBoundsExpression)
+      : null;
+
+    if (viewportMode === "user") {
+      return userBounds ?? campusBoundsExpression;
+    }
+
+    if (viewportMode === "campus") {
+      return campusBoundsExpression ?? userBounds;
+    }
+
+    if (viewportMode === "combined") {
+      if (campusBounds && userPosition) {
+        const normalizedUserLng = normalizeLng(userPosition[1]);
+        return [
+          [Math.min(campusBounds.minLat, userPosition[0]), Math.min(campusBounds.minLng, normalizedUserLng)],
+          [Math.max(campusBounds.maxLat, userPosition[0]), Math.max(campusBounds.maxLng, normalizedUserLng)],
+        ];
+      }
+      return campusBoundsExpression ?? userBounds;
+    }
+
+    return campusBoundsExpression;
+  }, [viewportMode, campusBoundsExpression, campusBounds, userPosition]);
+
+  const locationStatusLabel = userPosition ? (userWithinCampus ? "Live guidance" : "Off campus") : "Awaiting GPS";
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -170,15 +338,65 @@ export default function NavigatePage() {
                 <span className="rounded-full border border-white/10 px-4 py-1 text-xs text-slate-300">
                   {selectedMap.locationPins.length} pins · {selectedMap.routes.length} routes
                 </span>
+                <span className="rounded-full border border-white/10 px-4 py-1 text-xs text-slate-300">
+                  {selectedMap.locationPins.length} pins · {selectedMap.routes.length} routes
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                <span className="uppercase tracking-[0.2em]">Viewport</span>
+                <div className="flex rounded-full border border-white/10 bg-slate-900/60 p-1 text-white">
+                  {[
+                    { value: "combined", label: "Pins + Me" },
+                    { value: "campus", label: "Campus" },
+                    { value: "user", label: "Me" },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={option.value === "user" && !userPosition}
+                      onClick={() => setViewportMode(option.value as typeof viewportMode)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                        viewportMode === option.value ? "bg-brand-500 text-white" : "text-slate-300"
+                      } ${!userPosition && option.value === "user" ? "opacity-40" : ""}`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60">
-                <MapContainer center={center} zoom={18} className="h-[520px] w-full" scrollWheelZoom>
-                  <TileLayer
-                    url={selectedMap.tileUrl ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"}
-                    attribution={selectedMap.tileAttribution ?? "© OpenStreetMap"}
-                    noWrap={true}
-                  />
+                <MapContainer
+                  center={center}
+                  zoom={18}
+                  className="h-[520px] w-full"
+                  scrollWheelZoom
+                  worldCopyJump
+                  maxBounds={[
+                    [-90, -180],
+                    [90, 180],
+                  ]}
+                  maxBoundsViscosity={1}
+                  key={`${selectedMap.id}-${viewportMode}`}
+                >
+                  {fitBounds && <FitMapBounds bounds={fitBounds} />}
+                  {selectedMap.baseMapType === "IMAGE_OVERLAY" &&
+                  selectedMap.imageOverlayUrl &&
+                  selectedMap.imageBounds &&
+                  parseImageBounds(selectedMap.imageBounds) ? (
+                    <ImageOverlay
+                      url={selectedMap.imageOverlayUrl}
+                      bounds={parseImageBounds(selectedMap.imageBounds)!}
+                      opacity={1}
+                    />
+                  ) : (
+                    <TileLayer
+                      url={selectedMap.tileUrl ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"}
+                      attribution={selectedMap.tileAttribution ?? "© OpenStreetMap"}
+                      noWrap={false}
+                    />
+                  )}
                   {routePolyline && (
                     <Polyline
                       positions={routePolyline}
@@ -188,7 +406,7 @@ export default function NavigatePage() {
                       dashArray="10, 15"
                     />
                   )}
-                  {userPosition && routePolyline && routePolyline.length > 0 && (
+                  {userPosition && userWithinCampus && routePolyline && routePolyline.length > 0 && (
                     <Polyline
                       positions={[userPosition, routePolyline[0]]}
                       color="#94a3b8"
@@ -198,29 +416,33 @@ export default function NavigatePage() {
                     />
                   )}
                   {selectedMap.locationPins.map((pin) => (
-                    userIcon && (
-                      <Marker key={pin.id} position={[pin.lat, pin.lng]} icon={userIcon}>
-                        <Popup>
-                          <div className="space-y-1 text-slate-800">
-                            <p className="font-semibold">{pin.name}</p>
-                            {pin.description && <p className="text-sm">{pin.description}</p>}
-                            <button
-                              onClick={() => router.push(`/navigate?destination=${encodeURIComponent(pin.name)}`)}
-                              className="mt-2 w-full rounded-md bg-brand-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-400"
-                            >
-                              Navigate Here
-                            </button>
-                          </div>
-                        </Popup>
-                      </Marker>
-                    )
+                    <Marker key={pin.id} position={[pin.lat, pin.lng]}>
+                      <Popup>
+                        <div className="space-y-1 text-slate-800">
+                          <p className="font-semibold">{pin.name}</p>
+                          {pin.description && <p className="text-sm">{pin.description}</p>}
+                          <button
+                            onClick={() => router.push(`/navigate?destination=${encodeURIComponent(pin.name)}`)}
+                            className="mt-2 w-full rounded-md bg-brand-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-400"
+                          >
+                            Navigate Here
+                          </button>
+                        </div>
+                      </Popup>
+                    </Marker>
                   ))}
-                  {userPosition && userIcon && (
+                  {userPosition && (
                     <>
-                      <Marker position={userPosition} icon={userIcon}>
-                        <Popup>You are here (±{Math.round(accuracy)}m)</Popup>
+                      <Marker position={[userPosition[0], normalizeLng(userPosition[1])]} icon={userIcon ?? undefined}>
+                        <Popup>You are here (~{Math.round(accuracy)}m)</Popup>
                       </Marker>
-                      <Circle center={userPosition} radius={accuracy} pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.1 }} />
+                      {userWithinCampus && (
+                        <Circle
+                          center={[userPosition[0], normalizeLng(userPosition[1])]}
+                          radius={accuracy}
+                          pathOptions={{ color: "#3b82f6", fillColor: "#3b82f6", fillOpacity: 0.1 }}
+                        />
+                      )}
                     </>
                   )}
                 </MapContainer>
@@ -250,7 +472,14 @@ export default function NavigatePage() {
               </p>
             </div>
             <div className="mt-6 flex items-center justify-between rounded-2xl bg-slate-950/70 p-4 text-sm text-slate-200">
-              <span>Status · {userPosition ? "Live guidance" : "Awaiting GPS"}</span>
+              <div>
+                <span>Status · {locationStatusLabel}</span>
+                {userPosition && distanceFromCampus && !userWithinCampus && (
+                  <p className="text-xs text-slate-400">
+                    ~{distanceFromCampus.toFixed(1)} km from campus. Use “Pins + Me” view to see both.
+                  </p>
+                )}
+              </div>
               <div className="h-10 w-10 rounded-full border border-brand-400/40 bg-brand-400/20 p-2 text-brand-200">
                 <Mic className="h-full w-full" />
               </div>

@@ -1,5 +1,5 @@
 export function speak(text: string, onEnd?: () => void) {
-    if (!("speechSynthesis" in window)) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
         console.warn("Speech synthesis not supported");
         onEnd?.();
         return;
@@ -37,14 +37,34 @@ export function speak(text: string, onEnd?: () => void) {
 
 export function startListening(
     onResult: (text: string) => void,
-    onError?: (error: any) => void
+    onError?: (error: string) => void
 ) {
+    if (typeof window === "undefined") {
+        onError?.("Speech recognition is only available in the browser.");
+        return null;
+    }
+
+    if (!window.isSecureContext && window.location.hostname !== "localhost") {
+        const message = "Speech recognition requires HTTPS or localhost.";
+        console.warn(message);
+        onError?.(message);
+        return null;
+    }
+
+    if (!navigator.onLine) {
+        const message = "Speech recognition needs an active internet connection.";
+        console.warn(message);
+        onError?.(message);
+        return null;
+    }
+
     const SpeechRecognition =
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-        console.warn("Speech recognition not supported");
-        onError?.("Speech recognition not supported");
+        const message = "Speech recognition not supported in this browser.";
+        console.warn(message);
+        onError?.(message);
         return null;
     }
 
@@ -53,12 +73,12 @@ export function startListening(
     recognition.interimResults = false;
     recognition.lang = "en-US";
 
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
         const text = event.results[0][0].transcript;
         onResult(text);
     };
 
-    recognition.onerror = (event: any) => {
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error:", event.error);
         let errorMessage = "Unknown error";
         switch (event.error) {
@@ -72,12 +92,22 @@ export function startListening(
             case "no-speech":
                 errorMessage = "No speech detected.";
                 break;
+            case "aborted":
+                errorMessage = "Listening session was interrupted.";
+                break;
             default:
                 errorMessage = event.error;
         }
         onError?.(errorMessage);
     };
 
-    recognition.start();
+    try {
+        recognition.start();
+    } catch (error) {
+        console.error("Failed to start speech recognition:", error);
+        onError?.("Unable to start speech recognition. Please try again.");
+        return null;
+    }
+
     return recognition;
 }

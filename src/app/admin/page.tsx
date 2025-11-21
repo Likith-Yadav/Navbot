@@ -1,21 +1,44 @@
-import { redirect } from "next/navigation";
+import Link from "next/link";
+
 import { prisma } from "@/lib/prisma";
 import { auth, signOut } from "@/auth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MapManager } from "./_components/MapManager";
 import { PinManager } from "./_components/PinManager";
 import { RouteManager } from "./_components/RouteManager";
+import { LoginForm } from "./_components/login-form";
 
 async function handleSignOut() {
   "use server";
-  await signOut({ redirectTo: "/admin/login" });
+  await signOut({ redirectTo: "/admin" });
 }
 
 export default async function AdminDashboardPage() {
   const session = await auth();
 
   if (!session?.user) {
-    redirect("/admin/login");
+    return (
+      <div className="min-h-screen bg-slate-950 text-white">
+        <div className="mx-auto flex min-h-screen max-w-6xl flex-col justify-center gap-10 px-6 py-12 lg:flex-row lg:items-center">
+          <section className="space-y-6 lg:w-1/2">
+            <p className="text-sm uppercase tracking-[0.3em] text-brand-200">Admin access</p>
+            <h1 className="text-4xl font-semibold leading-tight">Sign in to manage maps & routes</h1>
+            <p className="text-slate-300">
+              Upload floor plans, curate pins, and orchestrate voice guidance from a single dashboard. Use your administrator
+              credentials to continue.
+            </p>
+
+            <Link href="/" className="text-sm text-slate-400 hover:text-brand-200">
+              ← Back to public site
+            </Link>
+          </section>
+
+          <section className="w-full lg:w-1/2">
+            <LoginForm />
+          </section>
+        </div>
+      </div>
+    );
   }
 
   // Fetch all maps with relations for the dashboard
