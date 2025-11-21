@@ -1,15 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { Compass, Loader2, Map, Mic, Navigation, PinIcon } from "lucide-react";
-import L, { LatLngBoundsExpression, LatLngExpression } from "leaflet";
+import { Compass, Loader2, Map, Mic, Navigation, PinIcon, Volume2 } from "lucide-react";
+import type { LatLngBoundsExpression, LatLngExpression, Icon } from "leaflet";
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 import { formatMeters } from "@/lib/utils";
-import type { MapDTO, RouteDTO } from "@/types/maps";
+import { speak } from "@/lib/voice-utils";
+import type { MapDTO, RouteDTO, LocationPinDTO, RouteWaypointDTO } from "@/types/maps";
 
 const MapContainer = dynamic(() => import("react-leaflet").then((mod) => mod.MapContainer), {
   ssr: false,
@@ -108,6 +109,29 @@ function distanceInKm(a: [number, number], b: [number, number]) {
   return R * c;
 }
 
+function bearingDegrees(a: [number, number], b: [number, number]) {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const toDeg = (rad: number) => (rad * 180) / Math.PI;
+  const dLng = toRad(b[1] - a[1]);
+  const y = Math.sin(dLng) * Math.cos(toRad(b[0]));
+  const x =
+    Math.cos(toRad(a[0])) * Math.sin(toRad(b[0])) -
+    Math.sin(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.cos(dLng);
+  const brng = toDeg(Math.atan2(y, x));
+  return (brng + 360) % 360;
+}
+
+function headingToText(heading: number) {
+  if (heading >= 337.5 || heading < 22.5) return "north";
+  if (heading < 67.5) return "northeast";
+  if (heading < 112.5) return "east";
+  if (heading < 157.5) return "southeast";
+  if (heading < 202.5) return "south";
+  if (heading < 247.5) return "southwest";
+  if (heading < 292.5) return "west";
+  return "northwest";
+}
+
 function FitMapBounds({ bounds }: { bounds: LatLngBoundsExpression }) {
   const map = useMap();
 
@@ -122,6 +146,9 @@ export default function NavigatePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const destinationParam = searchParams.get("destination");
+  const mapIdParam = searchParams.get("mapId");
+  const routeIdParam = searchParams.get("routeId");
+  const userNameParam = searchParams.get("user");
   const [maps, setMaps] = useState<MapDTO[]>([]);
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
   const [userPosition, setUserPosition] = useState<[number, number] | null>(null);
@@ -129,28 +156,37 @@ export default function NavigatePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewportMode, setViewportMode] = useState<"combined" | "campus" | "user">("combined");
+  const watchIdRef = useRef<number | null>(null);
 
-  const [userIcon, setUserIcon] = useState<L.Icon | null>(null);
+  const [userIcon, setUserIcon] = useState<Icon | null>(null);
+  const spokenWaypointsRef = useRef<Set<string>>(new Set());
+  const leafletRef = useRef<typeof import("leaflet")>();
 
   useEffect(() => {
-    // Ensure default Leaflet icon assets are set so pins always render
-    L.Icon.Default.mergeOptions({
-      iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-      iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-      shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-      iconSize: [25, 41],
-      iconAnchor: [12, 41],
-    });
+    if (typeof window === "undefined") return;
 
-    setUserIcon(
-      L.icon({
+    (async () => {
+      const L = await import("leaflet");
+      leafletRef.current = L;
+
+      L.Icon.Default.mergeOptions({
         iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
         iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-        iconSize: [30, 48],
-        iconAnchor: [15, 48],
-        className: "user-location-marker",
-      })
-    );
+        shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+      });
+
+      setUserIcon(
+        L.icon({
+          iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+          iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+          iconSize: [30, 48],
+          iconAnchor: [15, 48],
+          className: "user-location-marker",
+        })
+      );
+    })();
   }, []);
 
   useEffect(() => {
@@ -163,7 +199,10 @@ export default function NavigatePage() {
         }
         const body = await res.json();
         setMaps(body.data ?? []);
-        setSelectedMapId(body.data?.[0]?.id ?? null);
+        const initialMapId = mapIdParam && body.data?.some((m: MapDTO) => m.id === mapIdParam)
+          ? mapIdParam
+          : body.data?.[0]?.id ?? null;
+        setSelectedMapId(initialMapId);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to load maps");
       } finally {
@@ -172,27 +211,129 @@ export default function NavigatePage() {
     }
 
     fetchMaps();
+  }, [mapIdParam]);
+
+  const startGeolocation = useCallback(() => {
+    if (!("geolocation" in navigator)) {
+      setError("Geolocation not supported by this browser.");
+      return;
+    }
+    setError(null);
+    try {
+      // Grab a one-time current position to force permission prompt and seed state
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setUserPosition([pos.coords.latitude, pos.coords.longitude]);
+          setAccuracy(pos.coords.accuracy);
+        },
+        (err) => {
+          const message =
+            err.code === err.PERMISSION_DENIED
+              ? "Location permission denied. Please allow access and retry."
+              : err.code === err.POSITION_UNAVAILABLE
+                ? "Location unavailable. Try again with better signal."
+                : "Unable to read GPS. Retry after a moment.";
+          setError(message);
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 },
+      );
+
+      const watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          setUserPosition([pos.coords.latitude, pos.coords.longitude]);
+          setAccuracy(pos.coords.accuracy);
+        },
+        (err) => {
+          const message =
+            err.code === err.PERMISSION_DENIED
+              ? "Location permission denied. Please allow access and retry."
+              : err.code === err.POSITION_UNAVAILABLE
+                ? "Location unavailable. Try again with better signal."
+                : "Unable to read GPS. Retry after a moment.";
+          setError(message);
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 },
+      );
+      watchIdRef.current = watchId;
+    } catch (geoErr) {
+      setError("Unable to start geolocation. Please retry.");
+    }
   }, []);
 
   useEffect(() => {
-    if (!("geolocation" in navigator)) return;
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        setUserPosition([pos.coords.latitude, pos.coords.longitude]);
-        setAccuracy(pos.coords.accuracy);
-      },
-      () => {
-        setError((prev) => prev ?? "Geolocation unavailable. Some guidance features may be limited.");
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 },
-    );
-
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
+    startGeolocation();
+    return () => {
+      if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+    };
+  }, [startGeolocation]);
 
   const selectedMap = maps.find((map) => map.id === selectedMapId) ?? null;
+  const buildCampusTourRoute = (map: MapDTO): RouteDTO | null => {
+    if (!map.locationPins || map.locationPins.length < 2) return null;
+    const pins = map.locationPins.slice();
+    const mainGate =
+      pins.find((p) => /gate/i.test(p.name)) ??
+      pins.find((p) => /entrance|welcome/i.test(p.name)) ??
+      pins[0];
+    const rest = pins.filter((p) => p.id !== mainGate.id);
+    const ordered = [mainGate, ...rest, mainGate];
+    const waypoints: RouteWaypointDTO[] = ordered.map((p, idx) => ({
+      id: `virtual-${idx}`,
+      routeId: "virtual-campus-tour",
+      order: idx,
+      lat: p.lat,
+      lng: p.lng,
+      locationId: p.id,
+      location: p,
+      instruction:
+        idx === 0
+          ? "Start at the main gate."
+          : idx === ordered.length - 1
+            ? "Return to the main gate."
+            : `Proceed to ${p.name}.`,
+    }));
+
+    return {
+      id: "virtual-campus-tour",
+      mapId: map.id,
+      name: "Campus Tour",
+      slug: "campus-tour",
+      description: "Visit all locations and return to the main gate.",
+      isDefault: false,
+      estimatedMinutes: Math.max(10, ordered.length * 3),
+      startLocationId: mainGate.id,
+      endLocationId: mainGate.id,
+      startLocation: mainGate,
+      endLocation: mainGate,
+      instructions: "Follow the highlighted path through all locations.",
+      metadata: { virtual: true },
+      waypoints,
+      createdAt: "",
+      updatedAt: "",
+    };
+  };
+
   const activeRoute: RouteDTO | undefined = useMemo(() => {
     if (!selectedMap) return undefined;
+    spokenWaypointsRef.current.clear();
+
+    const tourRoute = selectedMap.routes.find((r) => /tour/i.test(r.name));
+    const wantsTour = destinationParam && /tour/i.test(destinationParam);
+    if (wantsTour) {
+      return (
+        tourRoute ??
+        buildCampusTourRoute(selectedMap) ??
+        selectedMap.routes
+          .slice()
+          .sort((a, b) => (b.waypoints?.length ?? 0) - (a.waypoints?.length ?? 0))[0] ??
+        selectedMap.routes[0]
+      );
+    }
+
+    if (routeIdParam) {
+      const byId = selectedMap.routes.find((route) => route.id === routeIdParam);
+      if (byId) return byId;
+    }
 
     // If a destination is provided via URL, try to find a matching route
     if (destinationParam) {
@@ -205,8 +346,44 @@ export default function NavigatePage() {
       if (matchingRoute) return matchingRoute;
     }
 
+    // Prefer an explicit tour route when no destination is specified
+    if (!destinationParam && tourRoute) return tourRoute;
+
     return selectedMap.routes.find((route) => route.isDefault) ?? selectedMap.routes[0];
-  }, [selectedMap, destinationParam]);
+  }, [selectedMap, destinationParam, routeIdParam]);
+
+  const guidanceSteps = useMemo(() => {
+    if (!activeRoute || !activeRoute.waypoints?.length) return [];
+    const sorted = activeRoute.waypoints.slice().sort((a, b) => a.order - b.order);
+    const steps: string[] = [];
+    let prevBearing: number | null = null;
+
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1];
+      const curr = sorted[i];
+      const distMeters = distanceInKm([prev.lat, prev.lng], [curr.lat, curr.lng]) * 1000;
+      const bearing = bearingDegrees([prev.lat, prev.lng], [curr.lat, curr.lng]);
+      const dir = headingToText(bearing);
+      const target = curr.location?.name ?? `waypoint ${i + 1}`;
+
+      let turnText = "";
+      if (prevBearing !== null) {
+        const delta = ((bearing - prevBearing + 540) % 360) - 180; // normalize to [-180,180]
+        if (Math.abs(delta) > 25) {
+          turnText = delta > 0 ? " then turn right" : " then turn left";
+        }
+      }
+
+      steps.push(`Go ${formatMeters(distMeters)} ${dir} to ${target}${turnText}.`);
+      prevBearing = bearing;
+    }
+
+    const finalName = activeRoute.endLocation?.name ?? sorted[sorted.length - 1]?.location?.name;
+    if (finalName) {
+      steps.push(`Arrive at ${finalName}.`);
+    }
+    return steps;
+  }, [activeRoute]);
 
   const routePolyline: LatLngExpression[] | undefined = activeRoute
     ? activeRoute.waypoints
@@ -215,9 +392,59 @@ export default function NavigatePage() {
         .map((waypoint) => [waypoint.lat, normalizeLng(waypoint.lng)])
     : undefined;
 
+  useEffect(() => {
+    if (!userPosition || !activeRoute || !routePolyline || routePolyline.length === 0) return;
+
+    const sortedWaypoints = activeRoute.waypoints.slice().sort((a, b) => a.order - b.order);
+    const thresholdMeters = 35;
+
+    const metersBetween = (a: [number, number], b: [number, number]) => distanceInKm(a, b) * 1000;
+
+    let closestIdx = -1;
+    let closestDist = Infinity;
+    sortedWaypoints.forEach((wp, idx) => {
+      const dist = metersBetween(userPosition, [wp.lat, wp.lng]);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIdx = idx;
+      }
+    });
+
+    if (closestIdx === -1 || closestDist > thresholdMeters) return;
+
+    const wp = sortedWaypoints[closestIdx];
+    const key = wp.id ?? `idx-${closestIdx}`;
+    if (spokenWaypointsRef.current.has(key)) return;
+    spokenWaypointsRef.current.add(key);
+
+    const isFinal = closestIdx === sortedWaypoints.length - 1;
+    if (wp.location) setArrivalPin(wp.location);
+    const line = isFinal
+      ? `You have arrived at ${activeRoute.endLocation?.name ?? "your destination"}.`
+      : wp.location?.audioText ??
+        wp.instruction ??
+        `Approaching ${wp.location?.name ?? `waypoint ${closestIdx + 1}`}. Keep following the path.`;
+    speak(line);
+  }, [userPosition, activeRoute, routePolyline]);
+
   const center: [number, number] = selectedMap?.locationPins?.[0]
     ? [selectedMap.locationPins[0].lat, selectedMap.locationPins[0].lng]
     : defaultCenter;
+
+  // Speak route summary once per route selection, even if user is off campus
+  const hasSpokenRouteRef = useRef<string | null>(null);
+  const [arrivalPin, setArrivalPin] = useState<LocationPinDTO | null>(null);
+  useEffect(() => {
+    if (!activeRoute) return;
+    const key = `${activeRoute.id}-${destinationParam ?? ""}`;
+    if (hasSpokenRouteRef.current === key) return;
+    hasSpokenRouteRef.current = key;
+
+    const startName = activeRoute.startLocation?.name ?? "start";
+    const endName = activeRoute.endLocation?.name ?? "your destination";
+    const summary = `Starting guidance from ${startName} to ${endName}. Follow the highlighted path.`;
+    speak(summary);
+  }, [activeRoute, destinationParam]);
 
   const campusBounds = useMemo<BoundsInfo | null>(() => {
     if (!selectedMap?.locationPins.length) return null;
@@ -291,6 +518,10 @@ export default function NavigatePage() {
   }, [viewportMode, campusBoundsExpression, campusBounds, userPosition]);
 
   const locationStatusLabel = userPosition ? (userWithinCampus ? "Live guidance" : "Off campus") : "Awaiting GPS";
+  const handleRetryGps = () => {
+    if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+    startGeolocation();
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -304,6 +535,11 @@ export default function NavigatePage() {
             <div className="ml-auto flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm">
               <Navigation className="h-4 w-4 text-brand-300" />
               <span>{userPosition ? "Tracking your location" : "Waiting for GPS"}</span>
+              {!userPosition && (
+                <button onClick={handleRetryGps} className="text-xs text-brand-200 underline hover:text-brand-100">
+                  Retry
+                </button>
+              )}
             </div>
           </div>
 
@@ -315,8 +551,14 @@ export default function NavigatePage() {
           )}
 
           {error && !loading && (
-            <div className="rounded-3xl border border-red-500/40 bg-red-500/10 p-6 text-sm text-red-200">
-              {error}
+            <div className="flex flex-wrap items-center gap-4 rounded-3xl border border-red-500/40 bg-red-500/10 p-6 text-sm text-red-200">
+              <span>{error}</span>
+              <button
+                onClick={handleRetryGps}
+                className="rounded-full border border-red-200/60 px-3 py-1 text-xs font-semibold text-red-50 hover:bg-red-200/10"
+              >
+                Retry GPS
+              </button>
             </div>
           )}
 
@@ -416,11 +658,30 @@ export default function NavigatePage() {
                     />
                   )}
                   {selectedMap.locationPins.map((pin) => (
-                    <Marker key={pin.id} position={[pin.lat, pin.lng]}>
+                    <Marker
+                      key={pin.id}
+                      position={[pin.lat, pin.lng]}
+                      eventHandlers={{
+                        click: () => speak(pin.audioText ?? pin.description ?? `You selected ${pin.name}.`),
+                      }}
+                    >
                       <Popup>
-                        <div className="space-y-1 text-slate-800">
+                        <div className="space-y-2 text-slate-800">
                           <p className="font-semibold">{pin.name}</p>
+                          {pin.imageUrl && (
+                            <img
+                              src={pin.imageUrl}
+                              alt={pin.name}
+                              className="h-28 w-full rounded-lg object-cover"
+                            />
+                          )}
                           {pin.description && <p className="text-sm">{pin.description}</p>}
+                          <button
+                            onClick={() => speak(pin.audioText ?? pin.description ?? `You selected ${pin.name}.`)}
+                            className="mt-1 inline-flex items-center gap-1 text-xs text-brand-600 hover:text-brand-500"
+                          >
+                            <Volume2 className="h-3 w-3" /> Play audio
+                          </button>
                           <button
                             onClick={() => router.push(`/navigate?destination=${encodeURIComponent(pin.name)}`)}
                             className="mt-2 w-full rounded-md bg-brand-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-400"
@@ -453,6 +714,27 @@ export default function NavigatePage() {
         </div >
 
         <aside className="w-full space-y-6 lg:w-1/3">
+          {arrivalPin && (
+            <div className="rounded-3xl border border-brand-400/40 bg-brand-400/10 p-4 text-sm text-white shadow-lg">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold">Arrived: {arrivalPin.name}</p>
+                <button
+                  onClick={() => setArrivalPin(null)}
+                  className="text-xs text-brand-100 hover:text-white"
+                >
+                  Close
+                </button>
+              </div>
+              {arrivalPin.imageUrl && (
+                <img
+                  src={arrivalPin.imageUrl}
+                  alt={arrivalPin.name}
+                  className="mt-3 h-36 w-full rounded-2xl object-cover"
+                />
+              )}
+              {arrivalPin.description && <p className="mt-2 text-slate-100">{arrivalPin.description}</p>}
+            </div>
+          )}
           <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-6 shadow-xl">
             <div className="flex items-center gap-3">
               <Mic className="h-5 w-5 text-brand-300" />
@@ -515,7 +797,18 @@ export default function NavigatePage() {
                 </div>
                 <div className="rounded-2xl border border-white/10 p-4 text-sm text-slate-300">
                   <p className="text-xs uppercase tracking-wide text-slate-500">Guidance</p>
-                  <p>{activeRoute.instructions ?? "Follow the pathway highlighted on the map."}</p>
+                  {guidanceSteps.length > 0 ? (
+                    <ul className="mt-2 space-y-2">
+                      {guidanceSteps.map((step, idx) => (
+                        <li key={idx} className="flex gap-2">
+                          <span className="text-brand-300 font-semibold">{idx + 1}.</span>
+                          <span>{step}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>{activeRoute.instructions ?? "Follow the pathway highlighted on the map."}</p>
+                  )}
                   <p className="mt-3 text-xs text-slate-500">
                     {activeRoute.estimatedMinutes ? `${activeRoute.estimatedMinutes} min` : "Approx."} · {formatMeters(320)}
                   </p>

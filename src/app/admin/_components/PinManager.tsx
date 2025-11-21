@@ -7,7 +7,7 @@ import { Loader2, MapPin, Trash2 } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-import { createPin, deletePin } from "@/app/actions/admin";
+import { createPin, deletePin, updatePin } from "@/app/actions/admin";
 import type { MapDTO } from "@/types/maps";
 
 // Dynamic imports for Leaflet components
@@ -33,32 +33,55 @@ export function PinManager({ maps }: PinManagerProps) {
     const [selectedMapId, setSelectedMapId] = useState<string>(maps[0]?.id ?? "");
     const [loading, setLoading] = useState(false);
 
-    // New Pin State
+    // New/Edit Pin State
     const [newPinPos, setNewPinPos] = useState<{ lat: number; lng: number } | null>(null);
+    const [editingPinId, setEditingPinId] = useState<string | null>(null);
     const [name, setName] = useState("");
     const [description, setDescription] = useState("");
+    const [imageUrl, setImageUrl] = useState("");
+    const [audioText, setAudioText] = useState("");
+    const [videoUrl, setVideoUrl] = useState("");
 
     const selectedMap = maps.find((m) => m.id === selectedMapId);
 
     async function handleCreate(e: React.FormEvent) {
         e.preventDefault();
-        if (!selectedMap || !newPinPos) return;
+        if (!selectedMap || (!newPinPos && !editingPinId)) return;
 
         setLoading(true);
         try {
-            const res = await createPin({
+            const payload = {
                 mapId: selectedMap.id,
                 name,
                 slug: name.toLowerCase().replace(/\s+/g, "-") + "-" + Date.now().toString().slice(-4),
                 description,
-                lat: newPinPos.lat,
-                lng: newPinPos.lng,
-            });
+                lat: newPinPos?.lat ?? selectedMap.locationPins.find((p) => p.id === editingPinId)?.lat ?? 0,
+                lng: newPinPos?.lng ?? selectedMap.locationPins.find((p) => p.id === editingPinId)?.lng ?? 0,
+                imageUrl: imageUrl || undefined,
+                audioText: audioText || undefined,
+                videoUrl: videoUrl || undefined,
+            };
+
+            const res = editingPinId
+                ? await updatePin(editingPinId, {
+                    name,
+                    description,
+                    imageUrl: imageUrl || undefined,
+                    audioText: audioText || undefined,
+                    videoUrl: videoUrl || undefined,
+                    lat: payload.lat,
+                    lng: payload.lng,
+                })
+                : await createPin(payload);
 
             if (res.success) {
                 setNewPinPos(null);
                 setName("");
                 setDescription("");
+                setImageUrl("");
+                setAudioText("");
+                setVideoUrl("");
+                setEditingPinId(null);
                 router.refresh();
             } else {
                 alert(res.error);
@@ -145,10 +168,10 @@ export function PinManager({ maps }: PinManagerProps) {
             <div className="space-y-6">
                 <div className="rounded-2xl border border-white/10 bg-slate-900/50 p-6">
                     <h3 className="mb-4 font-semibold">
-                        {newPinPos ? "Add New Pin" : "Select location on map"}
+                        {editingPinId ? "Edit Pin" : newPinPos ? "Add New Pin" : "Select location on map"}
                     </h3>
 
-                    {newPinPos ? (
+                    {newPinPos || editingPinId ? (
                         <form onSubmit={handleCreate} className="space-y-4">
                             <div className="space-y-2">
                                 <label className="text-sm text-slate-400">Name</label>
@@ -169,6 +192,33 @@ export function PinManager({ maps }: PinManagerProps) {
                                     placeholder="Optional details..."
                                 />
                             </div>
+                            <div className="space-y-2">
+                                <label className="text-sm text-slate-400">Image URL</label>
+                                <input
+                                    value={imageUrl}
+                                    onChange={(e) => setImageUrl(e.target.value)}
+                                    className="w-full rounded-lg border border-white/10 bg-slate-950 px-4 py-2 text-white focus:outline-none"
+                                    placeholder="https://example.com/image.jpg"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm text-slate-400">Audio text (for TTS)</label>
+                                <textarea
+                                    value={audioText}
+                                    onChange={(e) => setAudioText(e.target.value)}
+                                    className="w-full rounded-lg border border-white/10 bg-slate-950 px-4 py-2 text-white focus:outline-none"
+                                    placeholder="What should be spoken at this pin?"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm text-slate-400">Video URL</label>
+                                <input
+                                    value={videoUrl}
+                                    onChange={(e) => setVideoUrl(e.target.value)}
+                                    className="w-full rounded-lg border border-white/10 bg-slate-950 px-4 py-2 text-white focus:outline-none"
+                                    placeholder="https://example.com/video.mp4"
+                                />
+                            </div>
                             <div className="pt-2">
                                 <button
                                     type="submit"
@@ -176,11 +226,18 @@ export function PinManager({ maps }: PinManagerProps) {
                                     className="w-full flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-400 disabled:opacity-50"
                                 >
                                     {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                                    Save Pin
+                                    {editingPinId ? "Update Pin" : "Save Pin"}
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setNewPinPos(null)}
+                                    onClick={() => {
+                                        setNewPinPos(null);
+                                        setEditingPinId(null);
+                                        setName("");
+                                        setDescription("");
+                                        setImageUrl("");
+                                        setAudioText("");
+                                    }}
                                     className="mt-2 w-full text-sm text-slate-400 hover:text-white"
                                 >
                                     Cancel
@@ -199,14 +256,34 @@ export function PinManager({ maps }: PinManagerProps) {
                     <h3 className="mb-4 font-semibold">Existing Pins ({selectedMap.locationPins.length})</h3>
                     <div className="max-h-[300px] overflow-y-auto space-y-2 pr-2">
                         {selectedMap.locationPins.map((pin) => (
-                            <div key={pin.id} className="flex items-center justify-between rounded-lg bg-slate-950 p-3 text-sm">
-                                <span>{pin.name}</span>
-                                <button
-                                    onClick={() => handleDelete(pin.id)}
-                                    className="text-slate-500 hover:text-red-400"
-                                >
-                                    <Trash2 className="h-4 w-4" />
-                                </button>
+                            <div key={pin.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-950 p-3 text-sm">
+                                <div className="flex flex-col gap-1">
+                                    <span className="font-medium">{pin.name}</span>
+                                    {pin.imageUrl && (
+                                        <span className="text-xs text-slate-500 truncate max-w-[160px]">{pin.imageUrl}</span>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <button
+                                        onClick={() => {
+                                            setEditingPinId(pin.id);
+                                            setNewPinPos(null);
+                                            setName(pin.name);
+                                            setDescription(pin.description ?? "");
+                                            setImageUrl(pin.imageUrl ?? "");
+                                            setAudioText(pin.audioText ?? "");
+                                        }}
+                                        className="text-slate-400 hover:text-brand-300"
+                                    >
+                                        Edit
+                                    </button>
+                                    <button
+                                        onClick={() => handleDelete(pin.id)}
+                                        className="text-slate-500 hover:text-red-400"
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                    </button>
+                                </div>
                             </div>
                         ))}
                     </div>

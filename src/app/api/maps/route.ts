@@ -13,7 +13,17 @@ export async function GET(request: Request) {
     include: includeRelations
       ? {
           locationPins: true,
-          routes: { include: { waypoints: true } },
+          routes: {
+            include: {
+              waypoints: {
+                include: {
+                  location: true,
+                },
+              },
+              startLocation: true,
+              endLocation: true,
+            },
+          },
         }
       : undefined,
   });

@@ -58,13 +58,35 @@ export async function createPin(data: z.infer<typeof locationPayloadSchema>) {
     if (!session?.user) throw new Error("Unauthorized");
 
     try {
-        const pin = await prisma.locationPin.create({ data });
+        const pin = await prisma.locationPin.create({
+            data: {
+                ...data,
+            },
+        });
         revalidatePath("/admin");
         revalidatePath("/navigate");
         return { success: true, data: pin };
     } catch (error) {
         console.error(error);
         return { success: false, error: "Failed to create pin" };
+    }
+}
+
+export async function updatePin(id: string, data: z.infer<typeof locationUpdateSchema>) {
+    const session = await auth();
+    if (!session?.user) throw new Error("Unauthorized");
+
+    try {
+        const pin = await prisma.locationPin.update({
+            where: { id },
+            data,
+        });
+        revalidatePath("/admin");
+        revalidatePath("/navigate");
+        return { success: true, data: pin };
+    } catch (error) {
+        console.error("Update pin error:", error);
+        return { success: false, error: "Failed to update pin" };
     }
 }
 

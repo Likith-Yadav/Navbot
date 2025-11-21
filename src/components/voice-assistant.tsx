@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Mic, Send, Loader2 } from "lucide-react";
 import { speak, startListening } from "@/lib/voice-utils";
 import { processVoiceCommand } from "@/app/actions/gemini";
+import type { MapDTO } from "@/types/maps";
 
 type AssistantState =
     | "IDLE"
@@ -15,11 +16,27 @@ type AssistantState =
     | "LISTENING_DESTINATION"
     | "REDIRECTING";
 
+type DestinationSelection = {
+    destinationText: string;
+    mapId?: string;
+    routeId?: string;
+};
+
+function extractNameLocally(text: string) {
+    const cleaned = text.replace(/[^a-zA-Z\s]/g, " ").trim();
+    const match = cleaned.match(/(?:i am|i'm|my name is|this is)\s+([a-zA-Z]+)/i);
+    if (match) return match[1];
+    const firstWord = cleaned.split(/\s+/)[0];
+    return firstWord || cleaned;
+}
+
 export function VoiceAssistant() {
     const router = useRouter();
     const [state, setState] = useState<AssistantState>("IDLE");
     const [transcript, setTranscript] = useState("");
     const [userName, setUserName] = useState("");
+    const [maps, setMaps] = useState<MapDTO[]>([]);
+    const [selectedMap, setSelectedMap] = useState<MapDTO | null>(null);
     const [inputText, setInputText] = useState("");
     const [isListening, setIsListening] = useState(false);
     const hasStarted = useRef(false);
@@ -30,15 +47,76 @@ export function VoiceAssistant() {
         recognitionRef.current = null;
     }, []);
 
+    const resolveDestination = useCallback(
+        (raw: string): DestinationSelection => {
+            const text = raw.trim();
+            if (!selectedMap) {
+                return { destinationText: text };
+            }
+
+            // All places / tour request
+            if (/all|tour|whole|entire/i.test(text)) {
+                const tourRoute =
+                    selectedMap.routes.find((r) => /tour/i.test(r.name)) ??
+                    selectedMap.routes
+                        .slice()
+                        .sort((a, b) => (b.waypoints?.length ?? 0) - (a.waypoints?.length ?? 0))[0] ??
+                    selectedMap.routes.find((r) => r.isDefault) ??
+                    selectedMap.routes[0];
+                return {
+                    destinationText: tourRoute?.name ?? "Full campus tour",
+                    mapId: selectedMap.id,
+                    routeId: tourRoute?.id,
+                };
+            }
+
+            // Try match route by name
+            const routeMatch = selectedMap.routes.find((route) =>
+                route.name.toLowerCase().includes(text.toLowerCase()),
+            );
+            if (routeMatch) {
+                return { destinationText: routeMatch.name, mapId: selectedMap.id, routeId: routeMatch.id };
+            }
+
+            // Try match pins
+            const pinMatch = selectedMap.locationPins.find((pin) =>
+                pin.name.toLowerCase().includes(text.toLowerCase()),
+            );
+            if (pinMatch) {
+                return { destinationText: pinMatch.name, mapId: selectedMap.id };
+            }
+
+            return { destinationText: text, mapId: selectedMap.id };
+        },
+        [selectedMap],
+    );
+
     useEffect(() => {
         return () => {
             stopListening();
         };
     }, [stopListening]);
 
+    useEffect(() => {
+        (async () => {
+            try {
+                const res = await fetch("/api/maps?include=full", { cache: "no-store" });
+                const body = await res.json();
+                setMaps(body.data ?? []);
+                setSelectedMap(body.data?.[0] ?? null);
+            } catch (error) {
+                console.error("Unable to load maps for assistant", error);
+            }
+        })();
+    }, []);
+
+
     const startFlow = () => {
         if (hasStarted.current) return;
         hasStarted.current = true;
+        // Pre-load stored name if present
+        const storedName = typeof window !== "undefined" ? localStorage.getItem("navUserName") : null;
+        if (storedName) setUserName(storedName);
         setState("GREETING");
     };
 
@@ -50,17 +128,24 @@ export function VoiceAssistant() {
         if (state === "LISTENING_NAME" || state === "GREETING") {
             setTranscript(`You: ${inputText}`);
             const name = await processVoiceCommand(inputText, "NAME");
+            if (name && typeof window !== "undefined") localStorage.setItem("navUserName", name);
             setUserName(name);
             setInputText("");
             setState("CONFIRMING_NAME");
         } else if (state === "LISTENING_DESTINATION" || state === "CONFIRMING_NAME" || state === "ASKING_DESTINATION") {
             setTranscript(`You: ${inputText}`);
             const destination = await processVoiceCommand(inputText, "DESTINATION");
+            const selection = resolveDestination(destination);
             setInputText("");
             setState("REDIRECTING");
             setTimeout(() => {
-                router.push(`/navigate?destination=${encodeURIComponent(destination)}`);
-            }, 2000);
+                const params = new URLSearchParams();
+                params.set("destination", selection.destinationText);
+                if (selection.mapId) params.set("mapId", selection.mapId);
+                if (selection.routeId) params.set("routeId", selection.routeId);
+                if (userName) params.set("user", userName);
+                router.push(`/navigate?${params.toString()}`);
+            }, 1200);
         }
     };
 
@@ -70,60 +155,109 @@ export function VoiceAssistant() {
         }
 
         if (state === "GREETING") {
-            const greeting = "Hi there! Welcome to MVJ College of Engineering. I am your automated navigation assistant of MVJ. What's your name?";
-            setTranscript(`Assistant: ${greeting}`);
-            speak(greeting, () => {
-                setState("LISTENING_NAME");
-            });
+            const routeSnippet =
+                selectedMap?.routes?.length
+                    ? `I can guide you through ${selectedMap.routes.length} routes on ${selectedMap.name}.`
+                    : "I can help you navigate the campus.";
+
+            if (userName) {
+                const greeting = `Welcome back, ${userName}. ${routeSnippet} Tell me where you want to go or say "campus tour" for the full route.`;
+                setTranscript(`Assistant: ${greeting}`);
+                speak(greeting, () => setState("LISTENING_DESTINATION"));
+            } else {
+                const greeting = `Hi there! Welcome to ${selectedMap?.name ?? "campus"}. ${routeSnippet} What's your name?`;
+                setTranscript(`Assistant: ${greeting}`);
+                speak(greeting, () => {
+                    setState("LISTENING_NAME");
+                });
+            }
         } else if (state === "LISTENING_NAME") {
             setIsListening(true);
-            recognitionRef.current = startListening(
-                async (text) => {
+            (async () => {
+                try {
+                    if (navigator.mediaDevices?.getUserMedia) {
+                        await navigator.mediaDevices.getUserMedia({ audio: true });
+                    }
+                    recognitionRef.current = startListening(
+                        async (text) => {
+                            setIsListening(false);
+                            stopListening();
+                            setTranscript(`You: ${text}`);
+                            const parsed = await processVoiceCommand(text, "NAME");
+                            const cleaned = parsed && parsed !== "UNKNOWN" ? extractNameLocally(parsed) : extractNameLocally(text);
+                            const name = cleaned;
+                            if (name && typeof window !== "undefined") localStorage.setItem("navUserName", name);
+                            setUserName(name);
+                            setState("CONFIRMING_NAME");
+                        },
+                        (err) => {
+                            setIsListening(false);
+                            stopListening();
+                            setTranscript(`I couldn't catch that. Please type your response or tap the mic again. (${err})`);
+                        },
+                        { keepAlive: true }
+                    );
+                } catch (error) {
                     setIsListening(false);
                     stopListening();
-                    setTranscript(`You: ${text}`);
-                    const name = await processVoiceCommand(text, "NAME");
-                    setUserName(name);
-                    setState("CONFIRMING_NAME");
-                },
-                (err) => {
-                    console.error("Voice error:", err);
-                    setIsListening(false);
-                    stopListening();
-                    setTranscript(`Error: ${err}. Please type your response.`);
+                    setTranscript("Microphone blocked. Please allow mic access and tap the mic again.");
                 }
-            );
+            })();
         } else if (state === "CONFIRMING_NAME") {
             setIsListening(false);
-            const confirmation = `Nice to meet you, ${userName}. Where would you like to go?`;
+            const routeHint =
+                selectedMap?.routes?.length
+                    ? `You can say a building name, or pick a fixed route like ${selectedMap.routes
+                          .slice(0, 2)
+                          .map((r) => r.name)
+                          .join(" or ")}. Say "campus tour" to visit all and return to the main gate.`
+                    : "Tell me your destination.";
+            const confirmation = `Nice to meet you, ${userName}. ${routeHint}`;
             setTranscript(`Assistant: ${confirmation}`);
             speak(confirmation, () => {
                 setState("LISTENING_DESTINATION");
             });
         } else if (state === "LISTENING_DESTINATION") {
             setIsListening(true);
-            recognitionRef.current = startListening(
-                async (text) => {
+            (async () => {
+                try {
+                    if (navigator.mediaDevices?.getUserMedia) {
+                        await navigator.mediaDevices.getUserMedia({ audio: true });
+                    }
+                    recognitionRef.current = startListening(
+                        async (text) => {
+                            setIsListening(false);
+                            stopListening();
+                            setTranscript(`You: ${text}`);
+                            const destination = await processVoiceCommand(text, "DESTINATION");
+                            const selection = resolveDestination(destination);
+                            setState("REDIRECTING");
+                            const redirect = `Okay, taking you to ${selection.destinationText}.`;
+                            setTranscript(`Assistant: ${redirect}`);
+                            speak(redirect, () => {
+                                const params = new URLSearchParams();
+                                params.set("destination", selection.destinationText);
+                                if (selection.mapId) params.set("mapId", selection.mapId);
+                                if (selection.routeId) params.set("routeId", selection.routeId);
+                                if (userName) params.set("user", userName);
+                                router.push(`/navigate?${params.toString()}`);
+                            });
+                        },
+                        (err) => {
+                            setIsListening(false);
+                            stopListening();
+                            setTranscript(`I couldn't hear that. Please type your destination or tap the mic again. (${err})`);
+                        },
+                        { keepAlive: true }
+                    );
+                } catch (error) {
                     setIsListening(false);
                     stopListening();
-                    setTranscript(`You: ${text}`);
-                    const destination = await processVoiceCommand(text, "DESTINATION");
-                    setState("REDIRECTING");
-                    const redirect = `Okay, taking you to ${destination}.`;
-                    setTranscript(`Assistant: ${redirect}`);
-                    speak(redirect, () => {
-                        router.push(`/navigate?destination=${encodeURIComponent(destination)}`);
-                    });
-                },
-                (err) => {
-                    console.error("Voice error:", err);
-                    setIsListening(false);
-                    stopListening();
-                    setTranscript(`Error: ${err}. Please type your destination.`);
+                    setTranscript("Microphone blocked. Please allow mic access and tap the mic again.");
                 }
-            );
+            })();
         }
-    }, [state, userName, router, stopListening]);
+    }, [state, userName, router, stopListening, selectedMap, resolveDestination]);
 
     if (state === "IDLE") {
         return (
