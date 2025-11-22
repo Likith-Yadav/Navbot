@@ -157,7 +157,7 @@ function NavigatePageInner() {
   const [error, setError] = useState<string | null>(null);
   const [viewportMode, setViewportMode] = useState<"combined" | "campus" | "user">("combined");
   const watchIdRef = useRef<number | null>(null);
-  const rnMessageRef = useRef<(event: MessageEvent) => void>();
+  const rnMessageRef = useRef<((event: MessageEvent) => void) | null>(null);
 
   const [userIcon, setUserIcon] = useState<Icon | null>(null);
   const spokenWaypointsRef = useRef<Set<string>>(new Set());
@@ -413,7 +413,7 @@ function NavigatePageInner() {
     ? activeRoute.waypoints
       .slice()
       .sort((a, b) => a.order - b.order)
-        .map((waypoint) => [waypoint.lat, normalizeLng(waypoint.lng)])
+      .map((waypoint) => [waypoint.lat, normalizeLng(waypoint.lng)])
     : undefined;
 
   useEffect(() => {
@@ -449,8 +449,8 @@ function NavigatePageInner() {
     const line = isFinal
       ? `You have arrived at ${activeRoute.endLocation?.name ?? "your destination"}.`
       : wp.location?.audioText ??
-        wp.instruction ??
-        `Approaching ${wp.location?.name ?? `waypoint ${closestIdx + 1}`}. Keep following the path.`;
+      wp.instruction ??
+      `Approaching ${wp.location?.name ?? `waypoint ${closestIdx + 1}`}. Keep following the path.`;
     speak(line);
   }, [userPosition, activeRoute, routePolyline]);
 
@@ -514,9 +514,9 @@ function NavigatePageInner() {
   const fitBounds = useMemo<LatLngBoundsExpression | null>(() => {
     const userBounds: LatLngBoundsExpression | null = userPosition
       ? ([
-          [userPosition[0], normalizeLng(userPosition[1])],
-          [userPosition[0], normalizeLng(userPosition[1])],
-        ] as LatLngBoundsExpression)
+        [userPosition[0], normalizeLng(userPosition[1])],
+        [userPosition[0], normalizeLng(userPosition[1])],
+      ] as LatLngBoundsExpression)
       : null;
 
     if (viewportMode === "user") {
@@ -622,9 +622,8 @@ function NavigatePageInner() {
                       type="button"
                       disabled={option.value === "user" && !userPosition}
                       onClick={() => setViewportMode(option.value as typeof viewportMode)}
-                      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                        viewportMode === option.value ? "bg-brand-500 text-white" : "text-slate-300"
-                      } ${!userPosition && option.value === "user" ? "opacity-40" : ""}`}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${viewportMode === option.value ? "bg-brand-500 text-white" : "text-slate-300"
+                        } ${!userPosition && option.value === "user" ? "opacity-40" : ""}`}
                     >
                       {option.label}
                     </button>
@@ -648,9 +647,9 @@ function NavigatePageInner() {
                 >
                   {fitBounds && <FitMapBounds bounds={fitBounds} />}
                   {selectedMap.baseMapType === "IMAGE_OVERLAY" &&
-                  selectedMap.imageOverlayUrl &&
-                  selectedMap.imageBounds &&
-                  parseImageBounds(selectedMap.imageBounds) ? (
+                    selectedMap.imageOverlayUrl &&
+                    selectedMap.imageBounds &&
+                    parseImageBounds(selectedMap.imageBounds) ? (
                     <ImageOverlay
                       url={selectedMap.imageOverlayUrl}
                       bounds={parseImageBounds(selectedMap.imageBounds)!}
