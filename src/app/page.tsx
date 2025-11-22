@@ -30,7 +30,7 @@ export default function Home() {
         {/* Hero heading */}
         <h1 className="mb-6 text-center text-5xl font-bold leading-tight sm:text-6xl md:text-7xl lg:text-8xl">
           <span className="bg-gradient-to-r from-white via-brand-100 to-brand-200 bg-clip-text text-transparent">
-            MVJ Navigation
+            Navigation
           </span>
           <br />
           <span className="text-slate-300">Assistant</span>
