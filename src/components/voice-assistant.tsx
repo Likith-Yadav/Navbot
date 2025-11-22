@@ -41,6 +41,7 @@ export function VoiceAssistant() {
     const [isListening, setIsListening] = useState(false);
     const hasStarted = useRef(false);
     const recognitionRef = useRef<any>(null);
+    const rnVoiceListenerRef = useRef<any>(null);
 
     const stopListening = useCallback(() => {
         recognitionRef.current?.abort();
@@ -97,6 +98,72 @@ export function VoiceAssistant() {
         };
     }, [stopListening]);
 
+    const processIncomingText = useCallback(
+        async (text: string) => {
+            const trimmed = text.trim();
+            if (!trimmed) return;
+            stopListening();
+            setIsListening(false);
+
+            if (state === "LISTENING_NAME" || state === "GREETING") {
+                setTranscript(`You: ${trimmed}`);
+                const name = await processVoiceCommand(trimmed, "NAME");
+                if (name && typeof window !== "undefined") localStorage.setItem("navUserName", name);
+                setUserName(name);
+                setInputText("");
+                setState("CONFIRMING_NAME");
+            } else if (state === "LISTENING_DESTINATION" || state === "CONFIRMING_NAME" || state === "ASKING_DESTINATION") {
+                setTranscript(`You: ${trimmed}`);
+                const destination = await processVoiceCommand(trimmed, "DESTINATION");
+                const selection = resolveDestination(destination);
+                setInputText("");
+                setState("REDIRECTING");
+                setTimeout(() => {
+                    const params = new URLSearchParams();
+                    params.set("destination", selection.destinationText);
+                    if (selection.mapId) params.set("mapId", selection.mapId);
+                    if (selection.routeId) params.set("routeId", selection.routeId);
+                    if (userName) params.set("user", userName);
+                    router.push(`/navigate?${params.toString()}`);
+                }, 1200);
+            }
+        },
+        [resolveDestination, router, state, stopListening, userName],
+    );
+
+    const handleManualSubmit = async () => {
+        await processIncomingText(inputText);
+    };
+
+    const startFlow = () => {
+        if (hasStarted.current) return;
+        hasStarted.current = true;
+        // Pre-load stored name if present
+        const storedName = typeof window !== "undefined" ? localStorage.getItem("navUserName") : null;
+        if (storedName) setUserName(storedName);
+        setState("GREETING");
+    };
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const handler = (event: MessageEvent) => {
+            try {
+                if (!event.data) return;
+                const payload = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+                if (payload?.type === "VOICE_TEXT" && typeof payload?.text === "string") {
+                    void processIncomingText(payload.text);
+                }
+            } catch (err) {
+                console.warn("Bad RN voice payload", err);
+            }
+        };
+        rnVoiceListenerRef.current = handler;
+        window.addEventListener("message", handler);
+        return () => {
+            if (rnVoiceListenerRef.current) window.removeEventListener("message", rnVoiceListenerRef.current);
+        };
+    }, [processIncomingText]);
+
     useEffect(() => {
         (async () => {
             try {
@@ -109,45 +176,6 @@ export function VoiceAssistant() {
             }
         })();
     }, []);
-
-
-    const startFlow = () => {
-        if (hasStarted.current) return;
-        hasStarted.current = true;
-        // Pre-load stored name if present
-        const storedName = typeof window !== "undefined" ? localStorage.getItem("navUserName") : null;
-        if (storedName) setUserName(storedName);
-        setState("GREETING");
-    };
-
-    const handleManualSubmit = async () => {
-        if (!inputText.trim()) return;
-        stopListening();
-        setIsListening(false);
-
-        if (state === "LISTENING_NAME" || state === "GREETING") {
-            setTranscript(`You: ${inputText}`);
-            const name = await processVoiceCommand(inputText, "NAME");
-            if (name && typeof window !== "undefined") localStorage.setItem("navUserName", name);
-            setUserName(name);
-            setInputText("");
-            setState("CONFIRMING_NAME");
-        } else if (state === "LISTENING_DESTINATION" || state === "CONFIRMING_NAME" || state === "ASKING_DESTINATION") {
-            setTranscript(`You: ${inputText}`);
-            const destination = await processVoiceCommand(inputText, "DESTINATION");
-            const selection = resolveDestination(destination);
-            setInputText("");
-            setState("REDIRECTING");
-            setTimeout(() => {
-                const params = new URLSearchParams();
-                params.set("destination", selection.destinationText);
-                if (selection.mapId) params.set("mapId", selection.mapId);
-                if (selection.routeId) params.set("routeId", selection.routeId);
-                if (userName) params.set("user", userName);
-                router.push(`/navigate?${params.toString()}`);
-            }, 1200);
-        }
-    };
 
     useEffect(() => {
         if (state !== "LISTENING_NAME" && state !== "LISTENING_DESTINATION") {
@@ -175,11 +203,29 @@ export function VoiceAssistant() {
             setIsListening(true);
             (async () => {
                 try {
-                    if (navigator.mediaDevices?.getUserMedia) {
-                        await navigator.mediaDevices.getUserMedia({ audio: true });
+                    // Check if speech recognition is available
+                    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+                    if (!SpeechRecognition) {
+                        setIsListening(false);
+                        setTranscript("Voice input not supported in this browser. Please type your name below.");
+                        return;
                     }
+
+                    // Request microphone permission
+                    if (navigator.mediaDevices?.getUserMedia) {
+                        try {
+                            await navigator.mediaDevices.getUserMedia({ audio: true });
+                        } catch (permError) {
+                            setIsListening(false);
+                            setTranscript("Microphone access denied. Please allow microphone access in your browser settings, or type your name below.");
+                            console.error("Microphone permission error:", permError);
+                            return;
+                        }
+                    }
+
                     recognitionRef.current = startListening(
                         async (text) => {
+                            console.log("Voice input received:", text);
                             setIsListening(false);
                             stopListening();
                             setTranscript(`You: ${text}`);
@@ -191,16 +237,18 @@ export function VoiceAssistant() {
                             setState("CONFIRMING_NAME");
                         },
                         (err) => {
+                            console.error("Voice recognition error:", err);
                             setIsListening(false);
                             stopListening();
-                            setTranscript(`I couldn't catch that. Please type your response or tap the mic again. (${err})`);
+                            setTranscript(`I couldn't catch that. Please type your name below or try speaking again. (${err})`);
                         },
                         { keepAlive: true }
                     );
                 } catch (error) {
+                    console.error("Voice setup error:", error);
                     setIsListening(false);
                     stopListening();
-                    setTranscript("Microphone blocked. Please allow mic access and tap the mic again.");
+                    setTranscript("Unable to start voice input. Please type your name below.");
                 }
             })();
         } else if (state === "CONFIRMING_NAME") {
@@ -208,9 +256,9 @@ export function VoiceAssistant() {
             const routeHint =
                 selectedMap?.routes?.length
                     ? `You can say a building name, or pick a fixed route like ${selectedMap.routes
-                          .slice(0, 2)
-                          .map((r) => r.name)
-                          .join(" or ")}. Say "campus tour" to visit all and return to the main gate.`
+                        .slice(0, 2)
+                        .map((r) => r.name)
+                        .join(" or ")}. Say "campus tour" to visit all and return to the main gate.`
                     : "Tell me your destination.";
             const confirmation = `Nice to meet you, ${userName}. ${routeHint}`;
             setTranscript(`Assistant: ${confirmation}`);
@@ -221,11 +269,29 @@ export function VoiceAssistant() {
             setIsListening(true);
             (async () => {
                 try {
-                    if (navigator.mediaDevices?.getUserMedia) {
-                        await navigator.mediaDevices.getUserMedia({ audio: true });
+                    // Check if speech recognition is available
+                    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+                    if (!SpeechRecognition) {
+                        setIsListening(false);
+                        setTranscript("Voice input not supported in this browser. Please type your destination below.");
+                        return;
                     }
+
+                    // Request microphone permission
+                    if (navigator.mediaDevices?.getUserMedia) {
+                        try {
+                            await navigator.mediaDevices.getUserMedia({ audio: true });
+                        } catch (permError) {
+                            setIsListening(false);
+                            setTranscript("Microphone access denied. Please allow microphone access in your browser settings, or type your destination below.");
+                            console.error("Microphone permission error:", permError);
+                            return;
+                        }
+                    }
+
                     recognitionRef.current = startListening(
                         async (text) => {
+                            console.log("Voice input received:", text);
                             setIsListening(false);
                             stopListening();
                             setTranscript(`You: ${text}`);
@@ -244,16 +310,18 @@ export function VoiceAssistant() {
                             });
                         },
                         (err) => {
+                            console.error("Voice recognition error:", err);
                             setIsListening(false);
                             stopListening();
-                            setTranscript(`I couldn't hear that. Please type your destination or tap the mic again. (${err})`);
+                            setTranscript(`I couldn't hear that. Please type your destination below or try speaking again. (${err})`);
                         },
                         { keepAlive: true }
                     );
                 } catch (error) {
+                    console.error("Voice setup error:", error);
                     setIsListening(false);
                     stopListening();
-                    setTranscript("Microphone blocked. Please allow mic access and tap the mic again.");
+                    setTranscript("Unable to start voice input. Please type your destination below.");
                 }
             })();
         }

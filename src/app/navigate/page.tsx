@@ -157,6 +157,7 @@ function NavigatePageInner() {
   const [error, setError] = useState<string | null>(null);
   const [viewportMode, setViewportMode] = useState<"combined" | "campus" | "user">("combined");
   const watchIdRef = useRef<number | null>(null);
+  const rnMessageRef = useRef<(event: MessageEvent) => void>();
 
   const [userIcon, setUserIcon] = useState<Icon | null>(null);
   const spokenWaypointsRef = useRef<Set<string>>(new Set());
@@ -265,8 +266,28 @@ function NavigatePageInner() {
 
   useEffect(() => {
     startGeolocation();
+    if (typeof window !== "undefined") {
+      const handler = (event: MessageEvent) => {
+        try {
+          if (!event.data) return;
+          const payload = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+          if (payload?.type === "GPS_UPDATE" && payload?.coords) {
+            const { latitude, longitude, accuracy: acc } = payload.coords;
+            if (typeof latitude === "number" && typeof longitude === "number") {
+              setUserPosition([latitude, longitude]);
+              if (typeof acc === "number") setAccuracy(acc);
+            }
+          }
+        } catch (err) {
+          console.warn("Bad RN message", err);
+        }
+      };
+      rnMessageRef.current = handler;
+      window.addEventListener("message", handler);
+    }
     return () => {
       if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+      if (rnMessageRef.current) window.removeEventListener("message", rnMessageRef.current);
     };
   }, [startGeolocation]);
 
