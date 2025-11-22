@@ -64,9 +64,9 @@ export function speak(text: string, onEnd?: () => void) {
 }
 
 export function startListening(
-    onResult: (text: string) => void,
+    onResult: (text: string, isFinal: boolean) => void,
     onError?: (error: string) => void,
-    options?: { keepAlive?: boolean }
+    options?: { keepAlive?: boolean; interimResults?: boolean }
 ) {
     if (typeof window === "undefined") {
         onError?.("Speech recognition is only available in the browser.");
@@ -98,15 +98,36 @@ export function startListening(
     }
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.continuous = options?.keepAlive ?? false;
+    recognition.interimResults = options?.interimResults ?? true; // Enable interim results by default
     recognition.lang = "en-US";
+    recognition.maxAlternatives = 1;
     let retried = false;
     let stopped = false;
 
     recognition.onresult = (event: any) => {
-        const text = event.results[0][0].transcript;
-        onResult(text);
+        // Process all results to get the most recent transcript
+        let interimTranscript = "";
+        let finalTranscript = "";
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+                finalTranscript += transcript;
+            } else {
+                interimTranscript += transcript;
+            }
+        }
+
+        // Send interim results as they come in (like Google Voice)
+        if (interimTranscript) {
+            onResult(interimTranscript, false);
+        }
+
+        // Send final result when speech ends
+        if (finalTranscript) {
+            onResult(finalTranscript, true);
+        }
     };
 
     recognition.onend = () => {
@@ -153,21 +174,21 @@ export function startListening(
         }
 
         switch (event.error) {
-        case "network":
-            errorMessage = "Mic needs network. Please tap the mic again or type.";
-            break;
-        case "not-allowed":
-        case "service-not-allowed":
-            errorMessage = "Microphone access denied.";
-            break;
-        case "no-speech":
-            errorMessage = "We couldn't hear you.";
-            break;
-        case "aborted":
-            errorMessage = "Listening was interrupted.";
-            break;
-        default:
-            errorMessage = event.error;
+            case "network":
+                errorMessage = "Mic needs network. Please tap the mic again or type.";
+                break;
+            case "not-allowed":
+            case "service-not-allowed":
+                errorMessage = "Microphone access denied.";
+                break;
+            case "no-speech":
+                errorMessage = "We couldn't hear you.";
+                break;
+            case "aborted":
+                errorMessage = "Listening was interrupted.";
+                break;
+            default:
+                errorMessage = event.error;
         }
         try {
             stopped = true;

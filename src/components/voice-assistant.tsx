@@ -34,6 +34,7 @@ export function VoiceAssistant() {
     const router = useRouter();
     const [state, setState] = useState<AssistantState>("IDLE");
     const [transcript, setTranscript] = useState("");
+    const [interimTranscript, setInterimTranscript] = useState(""); // Live transcription
     const [userName, setUserName] = useState("");
     const [maps, setMaps] = useState<MapDTO[]>([]);
     const [selectedMap, setSelectedMap] = useState<MapDTO | null>(null);
@@ -224,8 +225,17 @@ export function VoiceAssistant() {
                     }
 
                     recognitionRef.current = startListening(
-                        async (text) => {
-                            console.log("Voice input received:", text);
+                        async (text, isFinal) => {
+                            console.log("Voice input received:", text, "isFinal:", isFinal);
+
+                            if (!isFinal) {
+                                // Show interim results in real-time (like Google Voice)
+                                setInterimTranscript(text);
+                                return;
+                            }
+
+                            // Final result - process it
+                            setInterimTranscript(""); // Clear interim
                             setIsListening(false);
                             stopListening();
                             setTranscript(`You: ${text}`);
@@ -238,11 +248,12 @@ export function VoiceAssistant() {
                         },
                         (err) => {
                             console.error("Voice recognition error:", err);
+                            setInterimTranscript("");
                             setIsListening(false);
                             stopListening();
                             setTranscript(`I couldn't catch that. Please type your name below or try speaking again. (${err})`);
                         },
-                        { keepAlive: true }
+                        { keepAlive: true, interimResults: true }
                     );
                 } catch (error) {
                     console.error("Voice setup error:", error);
@@ -290,8 +301,17 @@ export function VoiceAssistant() {
                     }
 
                     recognitionRef.current = startListening(
-                        async (text) => {
-                            console.log("Voice input received:", text);
+                        async (text, isFinal) => {
+                            console.log("Voice input received:", text, "isFinal:", isFinal);
+
+                            if (!isFinal) {
+                                // Show interim results in real-time (like Google Voice)
+                                setInterimTranscript(text);
+                                return;
+                            }
+
+                            // Final result - process it
+                            setInterimTranscript(""); // Clear interim
                             setIsListening(false);
                             stopListening();
                             setTranscript(`You: ${text}`);
@@ -311,11 +331,12 @@ export function VoiceAssistant() {
                         },
                         (err) => {
                             console.error("Voice recognition error:", err);
+                            setInterimTranscript("");
                             setIsListening(false);
                             stopListening();
                             setTranscript(`I couldn't hear that. Please type your destination below or try speaking again. (${err})`);
                         },
-                        { keepAlive: true }
+                        { keepAlive: true, interimResults: true }
                     );
                 } catch (error) {
                     console.error("Voice setup error:", error);
@@ -395,10 +416,19 @@ export function VoiceAssistant() {
                 <div className="mb-6 rounded-2xl border border-white/10 bg-slate-900/80 p-6 backdrop-blur-sm">
                     <p className="text-sm font-medium text-brand-300 mb-3">Transcript</p>
                     <div className="min-h-[80px] max-h-[200px] overflow-y-auto">
-                        {transcript ? (
-                            <p className="text-lg leading-relaxed text-white font-light">
-                                {transcript}
-                            </p>
+                        {transcript || interimTranscript ? (
+                            <div className="space-y-2">
+                                {transcript && (
+                                    <p className="text-lg leading-relaxed text-white font-light">
+                                        {transcript}
+                                    </p>
+                                )}
+                                {interimTranscript && (
+                                    <p className="text-lg leading-relaxed text-slate-400 italic font-light">
+                                        {interimTranscript}
+                                    </p>
+                                )}
+                            </div>
                         ) : (
                             <p className="text-slate-500 italic">
                                 Waiting for response...
