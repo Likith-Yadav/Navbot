@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import {
     mapPayloadSchema,
     locationPayloadSchema,
+    locationUpdateSchema,
     routePayloadSchema,
 } from "@/lib/schemas";
 

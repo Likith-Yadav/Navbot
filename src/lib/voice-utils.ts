@@ -104,7 +104,7 @@ export function startListening(
     let retried = false;
     let stopped = false;
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: any) => {
         const text = event.results[0][0].transcript;
         onResult(text);
     };
@@ -119,7 +119,7 @@ export function startListening(
         }
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    recognition.onerror = (event: any) => {
         console.warn("Speech recognition error:", event.error);
         let errorMessage = "Unknown error";
         const retryable = event.error === "network" || event.error === "no-speech";

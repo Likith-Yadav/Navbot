@@ -7,6 +7,7 @@ import { MapManager } from "./_components/MapManager";
 import { PinManager } from "./_components/PinManager";
 import { RouteManager } from "./_components/RouteManager";
 import { LoginForm } from "./_components/login-form";
+import type { MapDTO } from "@/types/maps";
 
 async function handleSignOut() {
   "use server";
@@ -42,19 +43,21 @@ export default async function AdminDashboardPage() {
   }
 
   // Fetch all maps with relations for the dashboard
-  const maps = await prisma.map.findMany({
-    orderBy: { name: "asc" },
-    include: {
-      locationPins: true,
-      routes: {
-        include: {
-          startLocation: true,
-          endLocation: true,
-          waypoints: true,
+  const maps = (
+    await prisma.map.findMany({
+      orderBy: { name: "asc" },
+      include: {
+        locationPins: true,
+        routes: {
+          include: {
+            startLocation: true,
+            endLocation: true,
+            waypoints: true,
+          },
         },
       },
-    },
-  });
+    })
+  ).map((m) => ({ ...m, imageBounds: m.imageBounds as Record<string, unknown> | null })) as any as MapDTO[];
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -64,7 +67,7 @@ export default async function AdminDashboardPage() {
             <p className="text-sm uppercase tracking-[0.3em] text-brand-200">Admin control</p>
             <h1 className="text-3xl font-semibold">Navigation workspace</h1>
             <p className="text-sm text-slate-400">
-              Signed in as {session.user.username ?? session.user.email}
+              Signed in as {(session.user as { username?: string }).username ?? session.user.email}
             </p>
           </div>
           <form action={handleSignOut} className="ml-auto">

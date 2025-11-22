@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Compass, Loader2, Map, Mic, Navigation, PinIcon, Volume2 } from "lucide-react";
@@ -142,7 +142,7 @@ function FitMapBounds({ bounds }: { bounds: LatLngBoundsExpression }) {
   return null;
 }
 
-export default function NavigatePage() {
+function NavigatePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const destinationParam = searchParams.get("destination");
@@ -160,7 +160,7 @@ export default function NavigatePage() {
 
   const [userIcon, setUserIcon] = useState<Icon | null>(null);
   const spokenWaypointsRef = useRef<Set<string>>(new Set());
-  const leafletRef = useRef<typeof import("leaflet")>();
+  const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const hasSpokenRouteRef = useRef<string | null>(null);
   const [arrivalPin, setArrivalPin] = useState<LocationPinDTO | null>(null);
   const [activePinCard, setActivePinCard] = useState<LocationPinDTO | null>(null);
@@ -882,5 +882,13 @@ export default function NavigatePage() {
         </aside>
       </div >
     </div >
+  );
+}
+
+export default function NavigatePage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">Loading…</div>}>
+      <NavigatePageInner />
+    </Suspense>
   );
 }

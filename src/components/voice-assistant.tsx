@@ -40,7 +40,7 @@ export function VoiceAssistant() {
     const [inputText, setInputText] = useState("");
     const [isListening, setIsListening] = useState(false);
     const hasStarted = useRef(false);
-    const recognitionRef = useRef<SpeechRecognition | null>(null);
+    const recognitionRef = useRef<any>(null);
 
     const stopListening = useCallback(() => {
         recognitionRef.current?.abort();
