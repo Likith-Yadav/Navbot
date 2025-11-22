@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Mic, Send, Loader2 } from "lucide-react";
 import { speak, startListening } from "@/lib/voice-utils";
@@ -135,6 +135,46 @@ export function VoiceAssistant() {
     const handleManualSubmit = async () => {
         await processIncomingText(inputText);
     };
+
+    const handleQuickSuggestion = async (suggestion: string) => {
+        setInputText(suggestion);
+        await processIncomingText(suggestion);
+    };
+
+    // Generate quick suggestions based on available routes and pins
+    const quickSuggestions = useMemo(() => {
+        if (!selectedMap) return [];
+
+        const suggestions: string[] = [];
+
+        // Always add campus tour
+        const tourRoute = selectedMap.routes.find((r) => /tour/i.test(r.name));
+        if (tourRoute) {
+            suggestions.push(tourRoute.name);
+        } else {
+            suggestions.push("Campus Tour");
+        }
+
+        // Add top 3 routes by name
+        selectedMap.routes
+            .filter((r) => !suggestions.includes(r.name))
+            .slice(0, 3)
+            .forEach((route) => {
+                suggestions.push(route.name);
+            });
+
+        // If we don't have enough, add popular pins
+        if (suggestions.length < 4) {
+            selectedMap.locationPins
+                .filter((pin) => !suggestions.includes(pin.name))
+                .slice(0, 4 - suggestions.length)
+                .forEach((pin) => {
+                    suggestions.push(pin.name);
+                });
+        }
+
+        return suggestions.slice(0, 4); // Max 4 suggestions
+    }, [selectedMap]);
 
     const startFlow = () => {
         if (hasStarted.current) return;
@@ -436,6 +476,25 @@ export function VoiceAssistant() {
                         )}
                     </div>
                 </div>
+
+                {/* Quick Suggestions - Only show when listening for destination */}
+                {(state === "LISTENING_DESTINATION" || state === "CONFIRMING_NAME" || state === "ASKING_DESTINATION") && quickSuggestions.length > 0 && (
+                    <div className="mb-6">
+                        <p className="text-xs uppercase tracking-wide text-slate-400 mb-3">Quick suggestions</p>
+                        <div className="flex flex-wrap gap-2">
+                            {quickSuggestions.map((suggestion, index) => (
+                                <button
+                                    key={index}
+                                    onClick={() => handleQuickSuggestion(suggestion)}
+                                    className="group relative overflow-hidden rounded-xl border border-brand-400/30 bg-gradient-to-br from-brand-500/10 to-brand-600/10 px-4 py-2.5 text-sm font-medium text-brand-200 transition-all duration-200 hover:border-brand-400/60 hover:from-brand-500/20 hover:to-brand-600/20 hover:text-white hover:scale-105 active:scale-95"
+                                >
+                                    <span className="relative z-10">{suggestion}</span>
+                                    <div className="absolute inset-0 bg-gradient-to-r from-brand-400/0 via-brand-400/10 to-brand-400/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Text Input */}
                 <div className="rounded-2xl border border-white/10 bg-slate-900/80 p-4 backdrop-blur-sm">
